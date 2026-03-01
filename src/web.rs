@@ -70,20 +70,18 @@ async fn handle_web_request(
             let json = serde_json::to_string_pretty(&cfg)?;
             send_json(&mut stream, 200, &json).await?;
         }
-        ("PUT", "/api/config") => {
-            match serde_json::from_str(body) {
-                Ok(new_cfg) => {
-                    if let Err(e) = config_mgr.update(new_cfg) {
-                        send_json(&mut stream, 500, &format!(r#"{{"error":"{}"}}"#, e)).await?;
-                    } else {
-                        send_json(&mut stream, 200, r#"{"ok":true}"#).await?;
-                    }
-                }
-                Err(e) => {
-                    send_json(&mut stream, 400, &format!(r#"{{"error":"{}"}}"#, e)).await?;
+        ("PUT", "/api/config") => match serde_json::from_str(body) {
+            Ok(new_cfg) => {
+                if let Err(e) = config_mgr.update(new_cfg) {
+                    send_json(&mut stream, 500, &format!(r#"{{"error":"{}"}}"#, e)).await?;
+                } else {
+                    send_json(&mut stream, 200, r#"{"ok":true}"#).await?;
                 }
             }
-        }
+            Err(e) => {
+                send_json(&mut stream, 400, &format!(r#"{{"error":"{}"}}"#, e)).await?;
+            }
+        },
 
         // ── Rules API ──
         ("GET", "/api/rules") => {

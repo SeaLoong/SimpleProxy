@@ -159,7 +159,10 @@ impl RuleEngine {
     }
 
     /// Replace all rules and save to disk.
-    pub fn set_rules(&self, rules: Vec<Rule>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn set_rules(
+        &self,
+        rules: Vec<Rule>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let content = serde_json::to_string_pretty(&rules)?;
         fs::write(&self.rules_path, content)?;
         // Reload from the freshly-written file to re-compile regexes
@@ -189,10 +192,7 @@ pub fn start_watcher(
         RecursiveMode::NonRecursive,
     )?;
 
-    let rules_filename = rules_path
-        .file_name()
-        .unwrap_or_default()
-        .to_os_string();
+    let rules_filename = rules_path.file_name().unwrap_or_default().to_os_string();
 
     std::thread::spawn(move || {
         let _watcher = watcher; // Keep watcher alive
@@ -206,11 +206,9 @@ pub fn start_watcher(
                     paths,
                     ..
                 }) => {
-                    let matches = paths.iter().any(|p| {
-                        p.file_name()
-                            .map(|n| n == rules_filename)
-                            .unwrap_or(false)
-                    });
+                    let matches = paths
+                        .iter()
+                        .any(|p| p.file_name().map(|n| n == rules_filename).unwrap_or(false));
                     if matches && last_reload.elapsed() >= debounce_duration {
                         info!("[RuleEngine] Rules file changed, reloading...");
                         if let Err(e) = engine.load() {

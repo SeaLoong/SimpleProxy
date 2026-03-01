@@ -97,7 +97,10 @@ impl ConfigManager {
     }
 
     /// Update config and save to file.
-    pub fn update(&self, new_config: AppConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn update(
+        &self,
+        new_config: AppConfig,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let content = serde_json::to_string_pretty(&new_config)?;
         fs::write(&self.config_path, &content)?;
         let mut cfg = self.config.write().unwrap();

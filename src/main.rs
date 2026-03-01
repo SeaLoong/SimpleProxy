@@ -111,11 +111,8 @@ async fn main() {
     }
 
     // Start proxy server
-    let server = proxy::ProxyServer::new(
-        Arc::clone(&rule_engine),
-        Arc::clone(&config_mgr),
-        cfg.port,
-    );
+    let server =
+        proxy::ProxyServer::new(Arc::clone(&rule_engine), Arc::clone(&config_mgr), cfg.port);
 
     // Handle shutdown signals
     let shutdown = async {

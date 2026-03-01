@@ -53,7 +53,8 @@ fn set_system_proxy_platform(
     use winreg::RegKey;
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu.create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")?;
+    let (key, _) =
+        hkcu.create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")?;
 
     // Save current settings
     let prev_enable: u32 = key.get_value("ProxyEnable").unwrap_or(0);
@@ -72,9 +73,9 @@ fn set_system_proxy_platform(
     Ok(SystemProxyGuardInner {
         restore_fn: Some(Box::new(move || {
             let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-            if let Ok((key, _)) = hkcu.create_subkey(
-                r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
-            ) {
+            if let Ok((key, _)) =
+                hkcu.create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
+            {
                 if let Err(e) = key.set_value("ProxyEnable", &prev_enable) {
                     error!("Failed to restore ProxyEnable: {}", e);
                 }
@@ -82,7 +83,10 @@ fn set_system_proxy_platform(
                     error!("Failed to restore ProxyServer: {}", e);
                 }
                 notify_windows_proxy_change();
-                debug!("Windows proxy restored (enable={}, server={})", prev_enable, prev_server);
+                debug!(
+                    "Windows proxy restored (enable={}, server={})",
+                    prev_enable, prev_server
+                );
             }
         })),
     })
@@ -107,7 +111,12 @@ fn notify_windows_proxy_change() {
     const INTERNET_OPTION_REFRESH: u32 = 37;
 
     unsafe {
-        InternetSetOptionW(ptr::null_mut(), INTERNET_OPTION_SETTINGS_CHANGED, ptr::null_mut(), 0);
+        InternetSetOptionW(
+            ptr::null_mut(),
+            INTERNET_OPTION_SETTINGS_CHANGED,
+            ptr::null_mut(),
+            0,
+        );
         InternetSetOptionW(ptr::null_mut(), INTERNET_OPTION_REFRESH, ptr::null_mut(), 0);
     }
 }

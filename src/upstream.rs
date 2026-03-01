@@ -23,13 +23,12 @@ pub struct ProxyAuth {
 /// Parse a proxy URL string into a ProxyInfo struct.
 /// Supports: http://host:port, http://user:pass@host:port,
 ///           socks5://host:port, socks5://user:pass@host:port
-pub fn parse_proxy_url(proxy_url: &str) -> Result<ProxyInfo, Box<dyn std::error::Error + Send + Sync>> {
+pub fn parse_proxy_url(
+    proxy_url: &str,
+) -> Result<ProxyInfo, Box<dyn std::error::Error + Send + Sync>> {
     // Handle socks5:// by temporarily replacing with http:// for URL parsing
     let (protocol, parse_url) = if let Some(stripped) = proxy_url.strip_prefix("socks5://") {
-        (
-            "socks5".to_string(),
-            format!("http://{}", stripped),
-        )
+        ("socks5".to_string(), format!("http://{}", stripped))
     } else {
         ("http".to_string(), proxy_url.to_string())
     };
@@ -120,7 +119,10 @@ pub async fn http_proxy_connect(
         return Err(format!("HTTP CONNECT failed: {}", response_str.trim()).into());
     }
 
-    debug!("HTTP CONNECT tunnel established to {}:{}", target_host, target_port);
+    debug!(
+        "HTTP CONNECT tunnel established to {}:{}",
+        target_host, target_port
+    );
     Ok(stream)
 }
 

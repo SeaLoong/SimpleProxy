@@ -22,19 +22,23 @@ const TEST_SERVER_PORT: u16 = 19999;
 fn http_request_via_proxy(
     url: &str,
     proxy_port: u16,
-) -> Result<(u16, std::collections::HashMap<String, String>, String), String>
-{
+) -> Result<(u16, std::collections::HashMap<String, String>, String), String> {
     let parsed: url::Url = url.parse().map_err(|e: url::ParseError| e.to_string())?;
     let host = parsed.host_str().unwrap_or("127.0.0.1");
 
-    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", proxy_port)).map_err(|e| e.to_string())?;
-    stream.set_read_timeout(Some(Duration::from_secs(5))).map_err(|e| e.to_string())?;
+    let mut stream =
+        TcpStream::connect(format!("127.0.0.1:{}", proxy_port)).map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|e| e.to_string())?;
 
     let request = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
         url, host
     );
-    stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| e.to_string())?;
 
     let mut response = Vec::new();
     let _ = stream.read_to_end(&mut response);
@@ -116,11 +120,7 @@ fn start_test_server() -> TcpListener {
 
                     let (status, content_type, body) = match path {
                         "/new-page" => ("200 OK", "text/html", "Redirected!"),
-                        "/api/data" => (
-                            "200 OK",
-                            "application/json",
-                            r#"{"original": true}"#,
-                        ),
+                        "/api/data" => ("200 OK", "application/json", r#"{"original": true}"#),
                         "/forward-test" => ("200 OK", "text/plain", "forward-ok"),
                         _ => ("200 OK", "text/plain", "OK"),
                     };
@@ -196,16 +196,12 @@ fn start_upstream_proxy() -> (TcpListener, Arc<AtomicU32>) {
                             let resp_str = String::from_utf8_lossy(&resp_buf);
 
                             // Inject X-Upstream-Proxy header
-                            if let Some(header_end) =
-                                resp_str.find("\r\n\r\n")
-                            {
+                            if let Some(header_end) = resp_str.find("\r\n\r\n") {
                                 let headers_part = &resp_str[..header_end];
                                 let body_part = &resp_buf[header_end + 4..];
 
-                                let new_resp = format!(
-                                    "{}\r\nX-Upstream-Proxy: true\r\n\r\n",
-                                    headers_part
-                                );
+                                let new_resp =
+                                    format!("{}\r\nX-Upstream-Proxy: true\r\n\r\n", headers_part);
                                 let _ = client_stream.write_all(new_resp.as_bytes());
                                 let _ = client_stream.write_all(body_part);
                             } else {
@@ -266,7 +262,7 @@ fn write_test_rules(path: &PathBuf) {
 }
 
 /// Write test config file
-fn write_test_config(path: &PathBuf, rules_path: &PathBuf) {
+fn write_test_config(path: &Path, rules_path: &Path) {
     let config = serde_json::json!({
         "port": PROXY_PORT,
         "rulesFile": rules_path.to_string_lossy(),
@@ -297,10 +293,7 @@ fn start_proxy_server(config_path: &Path) -> std::process::Child {
     };
 
     std::process::Command::new(exe)
-        .args([
-            "--config",
-            &config_path.to_string_lossy(),
-        ])
+        .args(["--config", &config_path.to_string_lossy()])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -405,10 +398,16 @@ fn test_proxy_rules() {
     ) {
         Ok((status, headers, body)) => {
             assert_test!("Status should be 200", status == 200);
-            assert_test!("Body should come from upstream", body.contains("Redirected"));
+            assert_test!(
+                "Body should come from upstream",
+                body.contains("Redirected")
+            );
             assert_test!(
                 "Should have X-Upstream-Proxy header",
-                headers.get("x-upstream-proxy").map(|v| v == "true").unwrap_or(false)
+                headers
+                    .get("x-upstream-proxy")
+                    .map(|v| v == "true")
+                    .unwrap_or(false)
             );
         }
         Err(e) => {
@@ -425,10 +424,16 @@ fn test_proxy_rules() {
     ) {
         Ok((status, headers, body)) => {
             assert_test!("Status should be 200", status == 200);
-            assert_test!("Body should contain forward-ok", body.contains("forward-ok"));
+            assert_test!(
+                "Body should contain forward-ok",
+                body.contains("forward-ok")
+            );
             assert_test!(
                 "Should have X-Upstream-Proxy header",
-                headers.get("x-upstream-proxy").map(|v| v == "true").unwrap_or(false)
+                headers
+                    .get("x-upstream-proxy")
+                    .map(|v| v == "true")
+                    .unwrap_or(false)
             );
         }
         Err(e) => {

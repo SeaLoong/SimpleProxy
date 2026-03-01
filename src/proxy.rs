@@ -263,10 +263,7 @@ async fn handle_replace(
 
     let headers = vec![
         ("Content-Type".to_string(), content_type),
-        (
-            "X-Intercepted-By".to_string(),
-            "SimpleProxy".to_string(),
-        ),
+        ("X-Intercepted-By".to_string(), "SimpleProxy".to_string()),
     ];
 
     send_response(stream, status, &headers, &body).await?;
@@ -287,10 +284,7 @@ async fn handle_block(
 
     let headers = vec![
         ("Content-Type".to_string(), "text/plain".to_string()),
-        (
-            "X-Intercepted-By".to_string(),
-            "SimpleProxy".to_string(),
-        ),
+        ("X-Intercepted-By".to_string(), "SimpleProxy".to_string()),
     ];
 
     send_response(stream, status, &headers, body).await?;
@@ -309,7 +303,9 @@ async fn handle_proxy_forward(
     let parsed: url::Url = target_url.parse()?;
 
     let host = parsed.host_str().unwrap_or("localhost");
-    let port = parsed.port().unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+    let port = parsed
+        .port()
+        .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
     let path = if parsed.query().is_some() {
         format!("{}?{}", parsed.path(), parsed.query().unwrap())
     } else {
@@ -366,7 +362,12 @@ async fn handle_forward_via_proxy(
         Some(url) => url.clone(),
         None => {
             error!("forward rule missing upstreamProxy field");
-            send_error(stream, 500, "SimpleProxy: forward rule missing upstreamProxy").await?;
+            send_error(
+                stream,
+                500,
+                "SimpleProxy: forward rule missing upstreamProxy",
+            )
+            .await?;
             return Ok(());
         }
     };
@@ -376,7 +377,9 @@ async fn handle_forward_via_proxy(
     if proxy_info.protocol == "socks5" {
         let parsed: url::Url = full_url.parse()?;
         let host = parsed.host_str().unwrap_or("localhost");
-        let port = parsed.port().unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+        let port = parsed
+            .port()
+            .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
 
         let mut tunnel = connect_via_upstream(&upstream_url, host, port).await?;
         let path = if parsed.query().is_some() {
@@ -427,8 +430,9 @@ async fn forward_request(
         if proxy_info.protocol == "socks5" {
             let parsed: url::Url = full_url.parse()?;
             let host = parsed.host_str().unwrap_or("localhost");
-            let port =
-                parsed.port().unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+            let port = parsed
+                .port()
+                .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
 
             let mut tunnel = connect_via_upstream(upstream_url, host, port).await?;
             let path = if parsed.query().is_some() {
@@ -458,7 +462,9 @@ async fn forward_request(
         // Direct connection
         let parsed: url::Url = full_url.parse()?;
         let host = parsed.host_str().unwrap_or("localhost");
-        let port = parsed.port().unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+        let port = parsed
+            .port()
+            .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
         let path = if parsed.query().is_some() {
             format!("{}?{}", parsed.path(), parsed.query().unwrap())
         } else {
@@ -539,10 +545,7 @@ async fn handle_connect(
                 let _ = tokio::try_join!(c2s, s2c);
             }
             Err(e) => {
-                error!(
-                    "CONNECT upstream error {}:{} - {}",
-                    hostname, port, e
-                );
+                error!("CONNECT upstream error {}:{} - {}", hostname, port, e);
                 client_stream
                     .write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
                     .await?;
