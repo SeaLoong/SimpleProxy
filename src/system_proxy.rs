@@ -3,7 +3,7 @@
 //! Automatically sets and restores the system HTTP proxy settings.
 //! Supports Windows (registry), macOS (networksetup), and Linux (gsettings/env).
 
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 /// Guard that restores the system proxy settings when dropped.
 #[allow(dead_code)]
@@ -49,6 +49,7 @@ fn set_system_proxy_platform(
     host: &str,
     port: u16,
 ) -> Result<SystemProxyGuardInner, Box<dyn std::error::Error + Send + Sync>> {
+    use tracing::error;
     use winreg::enums::*;
     use winreg::RegKey;
 
