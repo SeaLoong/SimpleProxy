@@ -1,0 +1,64 @@
+[
+  {
+    "comment": "Example 1: Redirect a specific URL to another address",
+    "match": "http://example.com/old-page",
+    "type": "redirect",
+    "target": "http://example.com/new-page",
+    "statusCode": 302,
+    "enabled": true
+  },
+  {
+    "comment": "Example 2: Replace response content for a specific URL",
+    "match": "http://example.com/api/data",
+    "type": "replace",
+    "contentType": "application/json",
+    "body": "{\"message\": \"This response has been intercepted!\", \"data\": [1, 2, 3]}",
+    "statusCode": 200,
+    "enabled": true
+  },
+  {
+    "comment": "Example 3: Match URL with regex and replace with local file content",
+    "match": "^https?://example\\.com/static/.*\\.js$",
+    "isRegex": true,
+    "type": "replace",
+    "contentType": "application/javascript",
+    "file": "./mock/custom.js",
+    "statusCode": 200,
+    "enabled": false
+  },
+  {
+    "comment": "Example 4: Block requests matching a regex pattern",
+    "match": "^https?://ads\\.example\\.com/",
+    "isRegex": true,
+    "type": "block",
+    "statusCode": 403,
+    "body": "Blocked by SimpleProxy",
+    "enabled": false
+  },
+  {
+    "comment": "Example 5: Proxy forward with custom header injection",
+    "match": "http://example.com/api/user",
+    "type": "proxy",
+    "target": "http://localhost:3000/api/user",
+    "headers": {
+      "X-Custom-Header": "injected-by-simple-proxy"
+    },
+    "enabled": false
+  },
+  {
+    "comment": "Example 6: Forward matched requests through an HTTP upstream proxy",
+    "match": "^https?://special\\.example\\.com/",
+    "isRegex": true,
+    "type": "forward",
+    "upstreamProxy": "http://other-proxy:8080",
+    "enabled": false
+  },
+  {
+    "comment": "Example 7: Forward matched requests through a SOCKS5 proxy",
+    "match": "^https?://internal\\.corp\\.com/",
+    "isRegex": true,
+    "type": "forward",
+    "upstreamProxy": "socks5://127.0.0.1:1080",
+    "enabled": false
+  }
+]
