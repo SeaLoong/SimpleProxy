@@ -104,6 +104,14 @@ async fn handle_connection(
 
     // Check rules
     if let Some(rule) = engine.match_url(&full_url) {
+        let comment = rule.comment.as_deref().unwrap_or("-");
+        println!(
+            "\x1b[32m[Rule Hit]\x1b[0m \x1b[36m{}\x1b[0m | {} \x1b[33m{}\x1b[0m => {}",
+            comment,
+            rule.r#type.to_uppercase(),
+            rule.r#match,
+            full_url
+        );
         info!("[Intercept] {} => {}", rule.r#type.to_uppercase(), full_url);
         match rule.r#type.as_str() {
             "redirect" => handle_redirect(&mut stream, &rule).await?,

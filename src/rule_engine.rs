@@ -99,10 +99,38 @@ impl RuleEngine {
         Ok(engine)
     }
 
+    /// Create an empty RuleEngine (fallback when loading fails).
+    pub fn empty(rules_path: &Path) -> Self {
+        Self {
+            inner: RwLock::new(RuleEngineInner {
+                rules: Vec::new(),
+                raw_rules: Vec::new(),
+            }),
+            rules_path: rules_path.to_path_buf(),
+        }
+    }
+
     /// Load (or reload) rules from the JSON file.
+    /// If the file does not exist, creates a default empty rules file.
     pub fn load(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if !self.rules_path.exists() {
+            let default_rules: Vec<Rule> = Vec::new();
+            let content = serde_json::to_string_pretty(&default_rules)?;
+            if let Some(parent) = self.rules_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&self.rules_path, &content)?;
+            info!(
+                "[RuleEngine] Created default rules file at {}",
+                self.rules_path.display()
+            );
+        }
+
         let content = fs::read_to_string(&self.rules_path)?;
-        let raw_rules: Vec<Rule> = serde_json::from_str(&content)?;
+        let raw_rules: Vec<Rule> = serde_json::from_str(&content).unwrap_or_else(|e| {
+            error!("[RuleEngine] Invalid rules JSON, using empty rules: {}", e);
+            Vec::new()
+        });
 
         let enabled_rules: Vec<CompiledRule> = raw_rules
             .iter()
@@ -127,7 +155,26 @@ impl RuleEngine {
             .collect();
 
         let total = enabled_rules.len();
-        info!("[RuleEngine] Loaded {} enabled rules", total);
+        let skipped = raw_rules.len() - total;
+        info!(
+            "[RuleEngine] Loaded {} rules ({} enabled, {} disabled)",
+            raw_rules.len(),
+            total,
+            skipped
+        );
+        for (i, compiled) in enabled_rules.iter().enumerate() {
+            let r = &compiled.rule;
+            let pattern_type = if r.is_regex { "regex" } else { "exact" };
+            let comment = r.comment.as_deref().unwrap_or("-");
+            info!(
+                "[RuleEngine]   #{}: [{}] {} | match({})=\"{}\"",
+                i + 1,
+                r.r#type,
+                comment,
+                pattern_type,
+                r.r#match
+            );
+        }
 
         let mut inner = self.inner.write().unwrap();
         inner.rules = enabled_rules;

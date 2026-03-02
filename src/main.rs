@@ -44,12 +44,12 @@ async fn main() {
             .join(&args.config)
     };
 
-    // Load configuration
+    // Load configuration (creates default if missing, uses defaults on invalid JSON)
     let config_mgr = match config::ConfigManager::load(&config_path) {
         Ok(mgr) => mgr,
         Err(e) => {
-            error!("Failed to load config: {}", e);
-            std::process::exit(1);
+            error!("Failed to load config: {}. Using defaults.", e);
+            config::ConfigManager::from_default(&config_path)
         }
     };
 
@@ -59,12 +59,12 @@ async fn main() {
     info!("Config file: {}", config_path.display());
     info!("Rules file: {}", rules_path.display());
 
-    // Load rules
+    // Load rules (creates default empty rules file if missing)
     let rule_engine = match rule_engine::RuleEngine::new(&rules_path) {
         Ok(engine) => Arc::new(engine),
         Err(e) => {
-            error!("Failed to load rules: {}", e);
-            std::process::exit(1);
+            error!("Failed to load rules: {}. Starting with empty rules.", e);
+            Arc::new(rule_engine::RuleEngine::empty(&rules_path))
         }
     };
 

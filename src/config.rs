@@ -68,14 +68,29 @@ pub struct ConfigManager {
 
 impl ConfigManager {
     /// Load config from file. If file doesn't exist, create with defaults.
+    /// If the file contains invalid JSON, log the error and use defaults.
     pub fn load(config_path: &Path) -> Result<Arc<Self>, Box<dyn std::error::Error + Send + Sync>> {
         let config = if config_path.exists() {
             let content = fs::read_to_string(config_path)?;
-            let cfg: AppConfig = serde_json::from_str(&content)?;
-            info!("[Config] Loaded from {}", config_path.display());
-            cfg
+            match serde_json::from_str::<AppConfig>(&content) {
+                Ok(cfg) => {
+                    info!("[Config] Loaded from {}", config_path.display());
+                    cfg
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "[Config] Invalid config JSON in {}: {}. Using defaults.",
+                        config_path.display(),
+                        e
+                    );
+                    AppConfig::default()
+                }
+            }
         } else {
             let cfg = AppConfig::default();
+            if let Some(parent) = config_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
             let content = serde_json::to_string_pretty(&cfg)?;
             fs::write(config_path, content)?;
             info!(
@@ -89,6 +104,14 @@ impl ConfigManager {
             config: RwLock::new(config),
             config_path: config_path.to_path_buf(),
         }))
+    }
+
+    /// Create a ConfigManager with default config (fallback when load fails).
+    pub fn from_default(config_path: &Path) -> Arc<Self> {
+        Arc::new(Self {
+            config: RwLock::new(AppConfig::default()),
+            config_path: config_path.to_path_buf(),
+        })
     }
 
     /// Get a snapshot of the current config.
