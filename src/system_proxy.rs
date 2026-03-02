@@ -3,7 +3,8 @@
 //! Automatically sets and restores the system HTTP proxy settings.
 //! Supports Windows (registry), macOS (networksetup), and Linux (gsettings/env).
 
-use tracing::{debug, info};
+use std::sync::{Arc, Mutex};
+use tracing::{debug, error, info};
 
 /// Guard that restores the system proxy settings when dropped.
 #[allow(dead_code)]
@@ -34,7 +35,82 @@ impl Drop for SystemProxyGuardInner {
     }
 }
 
+/// Thread-safe manager for toggling the system proxy at runtime.
+pub struct SystemProxyManager {
+    host: String,
+    port: u16,
+    guard: Mutex<Option<SystemProxyGuardInner>>,
+}
+
+impl SystemProxyManager {
+    /// Create a new manager. If `initially_enabled` is true, the system proxy
+    /// is set immediately.
+    pub fn new(host: &str, port: u16, initially_enabled: bool) -> Arc<Self> {
+        let mgr = Arc::new(Self {
+            host: host.to_string(),
+            port,
+            guard: Mutex::new(None),
+        });
+        if initially_enabled {
+            if let Err(e) = mgr.enable() {
+                error!("Failed to set initial system proxy: {}", e);
+            }
+        }
+        mgr
+    }
+
+    /// Returns whether the system proxy is currently enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.guard.lock().unwrap().is_some()
+    }
+
+    /// Enable the system proxy. No-op if already enabled.
+    pub fn enable(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut guard = self.guard.lock().unwrap();
+        if guard.is_some() {
+            return Ok(()); // already enabled
+        }
+        let g = set_system_proxy_platform(&self.host, self.port)?;
+        info!(
+            "System proxy enabled: {}:{}",
+            self.host, self.port
+        );
+        *guard = Some(g);
+        Ok(())
+    }
+
+    /// Disable the system proxy (restores original settings). No-op if already disabled.
+    pub fn disable(&self) {
+        let mut guard = self.guard.lock().unwrap();
+        if let Some(g) = guard.take() {
+            drop(g); // triggers the restore function
+            info!("System proxy disabled");
+        }
+    }
+
+    /// Set the system proxy to the desired state.
+    pub fn set_enabled(&self, enabled: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if enabled {
+            self.enable()
+        } else {
+            self.disable();
+            Ok(())
+        }
+    }
+}
+
+impl Drop for SystemProxyManager {
+    fn drop(&mut self) {
+        // Ensure system proxy is restored when the manager is dropped.
+        let mut guard = self.guard.lock().unwrap();
+        if let Some(g) = guard.take() {
+            drop(g);
+        }
+    }
+}
+
 /// Set the system proxy and return a guard that restores it on drop.
+#[allow(dead_code)]
 pub fn set_system_proxy(
     host: &str,
     port: u16,

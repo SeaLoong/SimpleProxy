@@ -76,21 +76,12 @@ async fn main() {
         error!("Failed to start rules file watcher: {}", e);
     }
 
-    // Set system proxy if requested
-    let _system_proxy_guard = if cfg.system_proxy {
-        match system_proxy::set_system_proxy("127.0.0.1", cfg.port) {
-            Ok(guard) => {
-                info!("System proxy set to 127.0.0.1:{}", cfg.port);
-                Some(guard)
-            }
-            Err(e) => {
-                error!("Failed to set system proxy: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
+    // Create system proxy manager (supports runtime toggle)
+    let sys_proxy_mgr = system_proxy::SystemProxyManager::new(
+        "127.0.0.1",
+        cfg.port,
+        cfg.system_proxy,
+    );
 
     // Initialize certificate manager for HTTPS MITM
     let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
@@ -110,9 +101,10 @@ async fn main() {
     let web_cfg = Arc::clone(&config_mgr);
     let web_engine = Arc::clone(&rule_engine);
     let web_certs = Arc::clone(&cert_mgr);
+    let web_sys_proxy = Arc::clone(&sys_proxy_mgr);
     let web_port = cfg.web_port;
     tokio::spawn(async move {
-        if let Err(e) = web::start_web_server(web_cfg, web_engine, web_certs, web_port).await {
+        if let Err(e) = web::start_web_server(web_cfg, web_engine, web_certs, web_sys_proxy, web_port).await {
             error!("Web dashboard error: {}", e);
         }
     });
@@ -148,9 +140,13 @@ async fn main() {
                 error!("Proxy server error: {}", e);
             }
         }
-        _ = shutdown => {
-            // _system_proxy_guard drops here, restoring system proxy
-            info!("Goodbye!");
-        }
+        _ = shutdown => {}
     }
+
+    // Ensure system proxy is restored before exit
+    if sys_proxy_mgr.is_enabled() {
+        info!("Restoring system proxy settings before exit...");
+    }
+    drop(sys_proxy_mgr);
+    info!("Goodbye!");
 }

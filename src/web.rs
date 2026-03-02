@@ -4,6 +4,7 @@
 use crate::cert::CertManager;
 use crate::config::ConfigManager;
 use crate::rule_engine::{Rule, RuleEngine};
+use crate::system_proxy::SystemProxyManager;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -14,6 +15,7 @@ pub async fn start_web_server(
     config_mgr: Arc<ConfigManager>,
     rule_engine: Arc<RuleEngine>,
     cert_mgr: Arc<CertManager>,
+    sys_proxy_mgr: Arc<SystemProxyManager>,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
@@ -24,8 +26,9 @@ pub async fn start_web_server(
         let cfg = Arc::clone(&config_mgr);
         let eng = Arc::clone(&rule_engine);
         let crt = Arc::clone(&cert_mgr);
+        let sp = Arc::clone(&sys_proxy_mgr);
         tokio::spawn(async move {
-            if let Err(e) = handle_web_request(stream, cfg, eng, crt).await {
+            if let Err(e) = handle_web_request(stream, cfg, eng, crt, sp).await {
                 error!("[Web] Request error: {}", e);
             }
         });
@@ -38,6 +41,7 @@ async fn handle_web_request(
     config_mgr: Arc<ConfigManager>,
     rule_engine: Arc<RuleEngine>,
     cert_mgr: Arc<CertManager>,
+    sys_proxy_mgr: Arc<SystemProxyManager>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = vec![0u8; 65536];
     let n = stream.read(&mut buf).await?;
@@ -122,6 +126,35 @@ async fn handle_web_request(
                 pem
             );
             stream.write_all(resp.as_bytes()).await?;
+        }
+
+        // ── System Proxy API ──
+        ("GET", "/api/system-proxy") => {
+            let enabled = sys_proxy_mgr.is_enabled();
+            send_json(&mut stream, 200, &format!(r#"{{"enabled":{}}}"#, enabled)).await?;
+        }
+        ("PUT", "/api/system-proxy") => {
+            #[derive(serde::Deserialize)]
+            struct Toggle { enabled: bool }
+            match serde_json::from_str::<Toggle>(body) {
+                Ok(t) => {
+                    match sys_proxy_mgr.set_enabled(t.enabled) {
+                        Ok(()) => {
+                            // Also update config file so the setting persists
+                            let mut cfg = config_mgr.get();
+                            cfg.system_proxy = t.enabled;
+                            let _ = config_mgr.update(cfg);
+                            send_json(&mut stream, 200, &format!(r#"{{"ok":true,"enabled":{}}}"#, t.enabled)).await?;
+                        }
+                        Err(e) => {
+                            send_json(&mut stream, 500, &format!(r#"{{"error":"{}"}}"#, e)).await?;
+                        }
+                    }
+                }
+                Err(e) => {
+                    send_json(&mut stream, 400, &format!(r#"{{"error":"{}"}}"#, e)).await?;
+                }
+            }
         }
 
         // ── 404 ──
@@ -243,6 +276,14 @@ textarea{width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(-
 .cert-actions{display:flex;gap:8px;flex-shrink:0}
 .field-row{transition:all .2s}
 .field-hidden{display:none !important}
+.toggle-switch{position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0}
+.toggle-switch input{opacity:0;width:0;height:0}
+.toggle-slider{position:absolute;cursor:pointer;inset:0;background:var(--border);border-radius:24px;transition:.25s}
+.toggle-slider:before{content:'';position:absolute;height:18px;width:18px;left:3px;bottom:3px;background:var(--text);border-radius:50%;transition:.25s}
+.toggle-switch input:checked+.toggle-slider{background:var(--accent)}
+.toggle-switch input:checked+.toggle-slider:before{transform:translateX(20px)}
+.badge-on{background:rgba(74,222,128,.15);color:var(--success)}
+.badge-off{background:rgba(248,113,113,.15);color:var(--danger)}
 </style>
 </head>
 <body>
@@ -272,7 +313,11 @@ textarea{width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(-
   <div><label data-i18n="web_port"></label><input id="cfgWebPort" type="number"></div>
   <div><label data-i18n="upstream_proxy"></label><input id="cfgUpstream" type="text" data-ph="upstream_ph"></div>
   <div class="checkbox-row"><input id="cfgAutoOpen" type="checkbox"><label for="cfgAutoOpen" data-i18n="auto_open"></label></div>
-  <div class="checkbox-row"><input id="cfgSysProxy" type="checkbox"><label for="cfgSysProxy" data-i18n="sys_proxy"></label></div>
+  <div class="checkbox-row" style="display:flex;align-items:center;gap:12px">
+    <label class="toggle-switch"><input id="cfgSysProxy" type="checkbox" onchange="toggleSysProxy(this.checked)"><span class="toggle-slider"></span></label>
+    <label for="cfgSysProxy" data-i18n="sys_proxy" style="margin:0;cursor:pointer"></label>
+    <span id="sysProxyStatus" class="badge" style="margin-left:8px"></span>
+  </div>
 </div>
 <div class="actions"><button class="btn btn-primary" onclick="saveConfig()" data-i18n="save_config"></button></div>
 </div>
@@ -328,7 +373,11 @@ en:{
   config_title:'Configuration',
   proxy_port:'Proxy Port',rules_file:'Rules File',web_port:'Web Dashboard Port',
   upstream_proxy:'Upstream Proxy',upstream_ph:'e.g. http://host:port or socks5://host:port',
-  auto_open:'Auto-open browser on start',sys_proxy:'Set system proxy',
+  auto_open:'Auto-open browser on start',sys_proxy:'System Proxy',
+  sys_proxy_on:'ON',sys_proxy_off:'OFF',
+  sys_proxy_enabling:'Enabling...',sys_proxy_disabling:'Disabling...',
+  msg_sys_proxy_on:'System proxy enabled',msg_sys_proxy_off:'System proxy disabled',
+  msg_sys_proxy_err:'Failed to toggle system proxy',
   save_config:'Save Configuration',
   rules_title:'Rules',add_rule:'+ Add Rule',
   th_match:'Match',th_type:'Type',th_comment:'Comment',th_actions:'Actions',
@@ -364,7 +413,11 @@ zh:{
   config_title:'配置',
   proxy_port:'代理端口',rules_file:'规则文件',web_port:'面板端口',
   upstream_proxy:'上游代理',upstream_ph:'例如 http://host:port 或 socks5://host:port',
-  auto_open:'启动时自动打开浏览器',sys_proxy:'设置系统代理',
+  auto_open:'启动时自动打开浏览器',sys_proxy:'系统代理',
+  sys_proxy_on:'已开启',sys_proxy_off:'已关闭',
+  sys_proxy_enabling:'开启中...',sys_proxy_disabling:'关闭中...',
+  msg_sys_proxy_on:'系统代理已开启',msg_sys_proxy_off:'系统代理已关闭',
+  msg_sys_proxy_err:'切换系统代理失败',
   save_config:'保存配置',
   rules_title:'规则',add_rule:'+ 添加规则',
   th_match:'匹配',th_type:'类型',th_comment:'备注',th_actions:'操作',
@@ -491,7 +544,6 @@ function renderConfig(){
   document.getElementById('cfgWebPort').value=config.webPort||9000;
   document.getElementById('cfgUpstream').value=config.upstreamProxy||'';
   document.getElementById('cfgAutoOpen').checked=!!config.autoOpenBrowser;
-  document.getElementById('cfgSysProxy').checked=!!config.systemProxy;
 }
 
 async function saveConfig(){
@@ -609,7 +661,47 @@ function toast(msg,type){
   setTimeout(()=>el.classList.remove('show'),2500);
 }
 
-loadConfig();loadRules();applyI18n();
+/* ── System Proxy toggle ── */
+let sysProxyBusy=false;
+async function loadSysProxyStatus(){
+  try{
+    const r=await fetch('/api/system-proxy');
+    const s=await r.json();
+    document.getElementById('cfgSysProxy').checked=s.enabled;
+    updateSysProxyBadge(s.enabled);
+  }catch(e){}
+}
+function updateSysProxyBadge(on){
+  const badge=document.getElementById('sysProxyStatus');
+  badge.textContent=on?T('sys_proxy_on'):T('sys_proxy_off');
+  badge.className='badge '+(on?'badge-on':'badge-off');
+}
+async function toggleSysProxy(enabled){
+  if(sysProxyBusy)return;
+  sysProxyBusy=true;
+  const badge=document.getElementById('sysProxyStatus');
+  badge.textContent=enabled?T('sys_proxy_enabling'):T('sys_proxy_disabling');
+  badge.className='badge badge-'+(enabled?'on':'off');
+  try{
+    const r=await fetch('/api/system-proxy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
+    const d=await r.json();
+    if(r.ok){
+      updateSysProxyBadge(d.enabled);
+      toast(enabled?T('msg_sys_proxy_on'):T('msg_sys_proxy_off'),'ok');
+      config.systemProxy=d.enabled;
+    }else{
+      document.getElementById('cfgSysProxy').checked=!enabled;
+      updateSysProxyBadge(!enabled);
+      toast(d.error||T('msg_sys_proxy_err'),'err');
+    }
+  }catch(e){
+    document.getElementById('cfgSysProxy').checked=!enabled;
+    updateSysProxyBadge(!enabled);
+    toast(T('msg_net_err'),'err');
+  }finally{sysProxyBusy=false;}
+}
+
+loadConfig();loadRules();loadSysProxyStatus();applyI18n();
 </script>
 </body>
 </html>

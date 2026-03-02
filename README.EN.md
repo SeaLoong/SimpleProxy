@@ -11,7 +11,7 @@ A lightweight, configurable local HTTP/HTTPS proxy server written in Rust. Inter
 - **Web dashboard** – Built-in bilingual (English/Chinese) control panel at `http://127.0.0.1:9000`
 - **Hot reload** – Rules file is watched for changes and reloaded automatically
 - **Upstream proxy** – Route traffic through an HTTP or SOCKS5 upstream proxy (global or per-rule)
-- **System proxy** – Auto-configure OS-level proxy settings (Windows / macOS / Linux) with RAII-based restore on exit
+- **System proxy** – Auto-configure OS-level proxy settings (Windows / macOS / Linux) with real-time toggle from the web dashboard; automatically restored on exit
 - **Certificate management** – Auto-generate CA, system trust store detection, one-click download from dashboard
 - **Minimal footprint** – Single binary, no runtime dependencies
 
@@ -49,14 +49,14 @@ Settings live in **config.json** (separate from rules):
 }
 ```
 
-| Field             | Type         | Default        | Description                                           |
-| ----------------- | ------------ | -------------- | ----------------------------------------------------- |
-| `port`            | number       | `8888`         | Proxy server listen port                              |
-| `rulesFile`       | string       | `"rules.json"` | Path to the rules JSON file (relative to config file) |
-| `webPort`         | number       | `9000`         | Web dashboard listen port                             |
-| `autoOpenBrowser` | boolean      | `true`         | Open the dashboard in the default browser on start    |
-| `systemProxy`     | boolean      | `false`        | Auto-set OS proxy settings to point at this proxy     |
-| `upstreamProxy`   | string\|null | `null`         | Global upstream proxy URL (`http://`, `socks5://`)    |
+| Field             | Type         | Default        | Description                                                     |
+| ----------------- | ------------ | -------------- | --------------------------------------------------------------- |
+| `port`            | number       | `8888`         | Proxy server listen port                                        |
+| `rulesFile`       | string       | `"rules.json"` | Path to the rules JSON file (relative to config file)           |
+| `webPort`         | number       | `9000`         | Web dashboard listen port                                       |
+| `autoOpenBrowser` | boolean      | `true`         | Open the dashboard in the default browser on start              |
+| `systemProxy`     | boolean      | `false`        | Auto-set OS proxy on start (can be toggled live from dashboard) |
+| `upstreamProxy`   | string\|null | `null`         | Global upstream proxy URL (`http://`, `socks5://`)              |
 
 If the config file does not exist, a default one is created automatically.
 
@@ -152,6 +152,7 @@ The web dashboard shows the CA trust status and provides a download button.
 The built-in dashboard provides:
 
 - **Certificate status** – Shows whether the CA is trusted, with download and re-check buttons
+- **System proxy toggle** – Enable or disable the system proxy in real time without restarting; instant status feedback
 - **Configuration panel** – Edit all config.json fields and save
 - **Rules table** – View, add, edit, delete, and toggle rules
 - **Bilingual UI** – Switch between English and Chinese with one click
