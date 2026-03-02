@@ -1,35 +1,42 @@
 # SimpleProxy
 
-A lightweight, configurable local HTTP/HTTPS proxy server written in Rust. Intercept, redirect, replace, or block HTTP requests based on flexible rules. Includes a built-in web dashboard for visual management.
+**简体中文** | [English](README.EN.md)
 
-## Features
+轻量级、可配置的本地 HTTP/HTTPS 代理服务器，使用 Rust 编写。支持基于灵活规则的请求拦截、重定向、内容替换和屏蔽，内置 HTTPS MITM 中间人拦截功能。自带中英双语 Web 管理面板。
 
-- **Rule-based interception** – Match URLs by exact string or regex, then redirect, replace content, block, or forward requests
-- **Web dashboard** – Built-in control panel at `http://127.0.0.1:9000` for editing configuration and rules in the browser
-- **Hot reload** – Rules file is watched for changes and reloaded automatically
-- **Upstream proxy** – Route traffic through an HTTP or SOCKS5 upstream proxy
-- **System proxy** – Auto-configure OS-level proxy settings (Windows / macOS / Linux) with RAII-based restore on exit
-- **HTTPS tunneling** – Full CONNECT method support for TLS passthrough
-- **Minimal footprint** – Single binary, no runtime dependencies
+## 功能特性
 
-## Quick Start
+- **规则拦截** – 通过精确匹配或正则表达式匹配 URL，执行重定向、替换内容、屏蔽或转发操作
+- **HTTPS MITM 拦截** – 透明拦截 HTTPS 流量；自动生成 CA 证书和每个域名的叶子证书
+- **Web 管理面板** – 内置中英双语控制面板 `http://127.0.0.1:9000`
+- **热重载** – 监听规则文件变更，自动重新加载
+- **上游代理** – 支持通过 HTTP 或 SOCKS5 上游代理转发流量（全局或按规则配置）
+- **系统代理** – 自动配置系统级代理设置（Windows / macOS / Linux），退出时自动恢复
+- **证书管理** – 自动生成 CA、检测系统信任存储状态、面板一键下载证书
+- **极简部署** – 单个可执行文件，无运行时依赖
+
+## 快速开始
 
 ```bash
-# Build
+# 编译
 cargo build --release
 
-# Run (uses config.json in current directory by default)
+# 运行（默认使用当前目录下的 config.json）
 ./target/release/simple-proxy
 
-# Run with a custom config path
+# 使用自定义配置文件
 ./target/release/simple-proxy --config path/to/config.json
 ```
 
-On first launch the web dashboard opens automatically at `http://127.0.0.1:9000`.
+首次启动时：
 
-## Configuration
+1. 在 `ca/` 目录下自动生成 CA 证书
+2. 自动打开 Web 管理面板 `http://127.0.0.1:9000`
+3. 安装 CA 证书以启用无缝 HTTPS 拦截
 
-Settings live in **config.json** (separate from rules):
+## 配置
+
+配置保存在 **config.json** 中（与规则分离）：
 
 ```json
 {
@@ -42,25 +49,25 @@ Settings live in **config.json** (separate from rules):
 }
 ```
 
-| Field             | Type         | Default        | Description                                           |
-| ----------------- | ------------ | -------------- | ----------------------------------------------------- |
-| `port`            | number       | `8888`         | Proxy server listen port                              |
-| `rulesFile`       | string       | `"rules.json"` | Path to the rules JSON file (relative to config file) |
-| `webPort`         | number       | `9000`         | Web dashboard listen port                             |
-| `autoOpenBrowser` | boolean      | `true`         | Open the dashboard in the default browser on start    |
-| `systemProxy`     | boolean      | `false`        | Auto-set OS proxy settings to point at this proxy     |
-| `upstreamProxy`   | string\|null | `null`         | Global upstream proxy URL (`http://`, `socks5://`)    |
+| 字段              | 类型         | 默认值         | 说明                                       |
+| ----------------- | ------------ | -------------- | ------------------------------------------ |
+| `port`            | number       | `8888`         | 代理服务器监听端口                         |
+| `rulesFile`       | string       | `"rules.json"` | 规则 JSON 文件路径（相对于配置文件）       |
+| `webPort`         | number       | `9000`         | Web 面板监听端口                           |
+| `autoOpenBrowser` | boolean      | `true`         | 启动时自动打开浏览器                       |
+| `systemProxy`     | boolean      | `false`        | 自动设置系统代理                           |
+| `upstreamProxy`   | string\|null | `null`         | 全局上游代理 URL（`http://`、`socks5://`） |
 
-If the config file does not exist, a default one is created automatically.
+如果配置文件不存在，会自动创建默认配置。
 
-## Rules
+## 规则
 
-Rules are stored as a plain JSON array in **rules.json**:
+规则以 JSON 数组形式存储在 **rules.json** 中：
 
 ```json
 [
   {
-    "comment": "Redirect old page to new page",
+    "comment": "将旧页面重定向到新页面",
     "match": "http://example.com/old",
     "type": "redirect",
     "target": "http://example.com/new",
@@ -68,7 +75,7 @@ Rules are stored as a plain JSON array in **rules.json**:
     "enabled": true
   },
   {
-    "comment": "Block analytics",
+    "comment": "屏蔽分析脚本",
     "match": "^https?://analytics\\.example\\.com/.*",
     "isRegex": true,
     "type": "block",
@@ -78,86 +85,125 @@ Rules are stored as a plain JSON array in **rules.json**:
 ]
 ```
 
-### Rule Fields
+### 规则字段
 
-| Field           | Type    | Required | Description                                                |
-| --------------- | ------- | -------- | ---------------------------------------------------------- |
-| `match`         | string  | yes      | URL pattern (exact match or regex)                         |
-| `type`          | string  | yes      | `redirect` \| `replace` \| `block` \| `proxy` \| `forward` |
-| `isRegex`       | boolean | no       | Treat `match` as a regex pattern                           |
-| `target`        | string  | no       | Target URL (for `redirect` / `proxy`)                      |
-| `statusCode`    | number  | no       | HTTP status code to return                                 |
-| `body`          | string  | no       | Response body (for `replace` / `block`)                    |
-| `contentType`   | string  | no       | Content-Type header (for `replace`)                        |
-| `file`          | string  | no       | Local file path to serve (for `replace`)                   |
-| `headers`       | object  | no       | Custom headers to inject (for `proxy`)                     |
-| `upstreamProxy` | string  | no       | Per-rule upstream proxy (for `forward`)                    |
-| `comment`       | string  | no       | Human-readable description                                 |
-| `enabled`       | boolean | no       | Enable/disable the rule (default `true`)                   |
+| 字段            | 类型    | 必填 | 说明                                                       |
+| --------------- | ------- | ---- | ---------------------------------------------------------- |
+| `match`         | string  | 是   | URL 匹配模式（精确匹配或正则表达式）                       |
+| `type`          | string  | 是   | `redirect` \| `replace` \| `block` \| `proxy` \| `forward` |
+| `isRegex`       | boolean | 否   | 将 `match` 作为正则表达式处理                              |
+| `target`        | string  | 否   | 目标 URL（用于 `redirect` / `proxy`）                      |
+| `statusCode`    | number  | 否   | 返回的 HTTP 状态码                                         |
+| `body`          | string  | 否   | 响应体（用于 `replace` / `block`）                         |
+| `contentType`   | string  | 否   | Content-Type 响应头（用于 `replace`）                      |
+| `file`          | string  | 否   | 本地文件路径（用于 `replace`）                             |
+| `headers`       | object  | 否   | 自定义请求头（用于 `proxy` / `forward`）                   |
+| `upstreamProxy` | string  | 否   | 按规则指定的上游代理（用于 `forward`）                     |
+| `comment`       | string  | 否   | 规则描述                                                   |
+| `enabled`       | boolean | 否   | 启用/禁用规则（默认 `true`）                               |
 
-### Rule Types
+### 规则类型
 
-| Type       | Behavior                                               |
-| ---------- | ------------------------------------------------------ |
-| `redirect` | Returns a redirect response with `Location` header     |
-| `replace`  | Returns custom content (inline `body` or local `file`) |
-| `block`    | Returns an error response (default 403)                |
-| `proxy`    | Forwards the request to a different `target` URL       |
-| `forward`  | Forwards through a specific `upstreamProxy`            |
+| 类型       | 行为                                        |
+| ---------- | ------------------------------------------- |
+| `redirect` | 返回重定向响应，包含 `Location` 头          |
+| `replace`  | 返回自定义内容（内联 `body` 或本地 `file`） |
+| `block`    | 返回错误响应（默认 403）                    |
+| `proxy`    | 将请求转发到指定的 `target` URL             |
+| `forward`  | 通过指定的 `upstreamProxy` 转发请求         |
 
-## Web Dashboard
+## HTTPS 拦截
 
-The built-in dashboard provides:
+SimpleProxy 支持 HTTPS MITM（中间人）拦截：
 
-- **Configuration panel** – Edit all config.json fields and save
-- **Rules table** – View, add, edit, delete, and toggle rules
-- **Live persistence** – Changes are saved to disk immediately
+- 首次运行时，在 `ca/` 目录下生成根 CA 证书和密钥对
+- 对于匹配任意规则的域名，终止 TLS 连接并检查请求
+- 对于不匹配的域名，使用纯 TCP 隧道透传（不拦截）
+- 按域名动态生成叶子证书并缓存
 
-Access it at `http://127.0.0.1:<webPort>` (default 9000).
+### 安装 CA 证书
 
-## CLI
+**Windows：**
 
-```
-simple-proxy [OPTIONS]
-
-Options:
-  -c, --config <CONFIG>  Path to the config JSON file [default: config.json] [env: CONFIG_FILE]
-  -h, --help             Print help
-  -V, --version          Print version
+```powershell
+# 图形界面：双击 ca/ca.crt → 安装证书 → 本地计算机 → 受信任的根证书颁发机构
+# 或通过命令行（以管理员身份运行）：
+certutil -addstore Root ca\ca.crt
 ```
 
-## Project Structure
+**macOS：**
+
+```bash
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain ca/ca.crt
+```
+
+**Linux：**
+
+```bash
+sudo cp ca/ca.crt /usr/local/share/ca-certificates/simpleproxy-ca.crt
+sudo update-ca-certificates
+```
+
+Web 面板会显示 CA 信任状态，并提供下载和重新检查按钮。
+
+## Web 管理面板
+
+内置面板提供以下功能：
+
+- **证书状态** – 显示 CA 是否受信任，提供下载和重新检查按钮
+- **配置面板** – 编辑 config.json 中的所有字段并保存
+- **规则表格** – 查看、添加、编辑、删除和启用/禁用规则
+- **中英双语** – 一键切换中文和英文界面
+- **实时持久化** – 修改立即保存到磁盘
+
+访问地址：`http://127.0.0.1:<webPort>`（默认 9000）。
+
+## 命令行
+
+```
+simple-proxy [选项]
+
+选项：
+  -c, --config <CONFIG>  配置文件路径 [默认: config.json] [环境变量: CONFIG_FILE]
+  -h, --help             显示帮助信息
+  -V, --version          显示版本号
+```
+
+## 项目结构
 
 ```
 src/
-  main.rs          – Entry point, CLI parsing, orchestration
-  config.rs        – Config file loading and management
-  rule_engine.rs   – Rule loading, matching, hot-reload
-  proxy.rs         – HTTP/HTTPS proxy server (raw TCP)
-  upstream.rs      – HTTP and SOCKS5 upstream proxy connector
-  system_proxy.rs  – OS-level proxy configuration (Win/Mac/Linux)
-  web.rs           – Web dashboard server and embedded UI
-  lib.rs           – Library crate exports
-config.json        – Application settings
-rules.json         – Interception rules (plain array)
+  main.rs          – 入口，命令行解析，组件编排
+  config.rs        – 配置文件加载与管理
+  rule_engine.rs   – 规则加载、匹配、热重载
+  proxy.rs         – HTTP/HTTPS 代理服务器（含 MITM 支持）
+  cert.rs          – CA 证书管理及按域名生成证书
+  upstream.rs      – HTTP 和 SOCKS5 上游代理连接器
+  system_proxy.rs  – 系统级代理配置（Win/Mac/Linux）
+  web.rs           – Web 面板服务器及嵌入式双语 UI
+  lib.rs           – 库导出
+config.json        – 应用配置
+rules.json         – 拦截规则（JSON 数组）
+ca/                – 自动生成的 CA 证书和密钥（已 gitignore）
 ```
 
-## Building
+## 编译
 
 ```bash
-# Debug build
+# 调试编译
 cargo build
 
-# Release build (optimized, stripped)
+# 发布编译（优化、剥离符号）
 cargo build --release
 
-# Run tests
+# 运行测试
 cargo test
 
-# Lint
+# 代码检查
 cargo clippy
 ```
 
-## License
+## 许可证
 
-ISC
+[MIT](LICENSE)
