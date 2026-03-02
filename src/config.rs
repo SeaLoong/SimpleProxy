@@ -1,5 +1,6 @@
 //! Application configuration - loads settings from config.json.
 
+use crate::tun_proxy::TunConfig;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -32,6 +33,10 @@ pub struct AppConfig {
     /// Global upstream proxy URL
     #[serde(default, rename = "upstreamProxy")]
     pub upstream_proxy: Option<String>,
+
+    /// Virtual NIC (TUN) proxy configuration
+    #[serde(default)]
+    pub tun: TunConfig,
 }
 
 fn default_port() -> u16 {
@@ -56,6 +61,7 @@ impl Default for AppConfig {
             auto_open_browser: true,
             system_proxy: false,
             upstream_proxy: None,
+            tun: TunConfig::default(),
         }
     }
 }
@@ -69,13 +75,20 @@ pub struct ConfigManager {
 impl ConfigManager {
     /// Load config from file. If file doesn't exist, create with defaults.
     /// If the file contains invalid JSON, log the error and use defaults.
+    /// After loading, re-saves the config to backfill any missing fields
+    /// that may have been added in newer versions.
     pub fn load(config_path: &Path) -> Result<Arc<Self>, Box<dyn std::error::Error + Send + Sync>> {
-        let config = if config_path.exists() {
+        let (config, needs_backfill) = if config_path.exists() {
             let content = fs::read_to_string(config_path)?;
             match serde_json::from_str::<AppConfig>(&content) {
                 Ok(cfg) => {
                     info!("[Config] Loaded from {}", config_path.display());
-                    cfg
+                    // Check whether re-serializing produces different JSON.
+                    // If so, the file is missing fields that have since been added.
+                    let canonical = serde_json::to_string_pretty(&cfg)
+                        .unwrap_or_default();
+                    let needs = canonical.trim() != content.trim();
+                    (cfg, needs)
                 }
                 Err(e) => {
                     tracing::error!(
@@ -83,7 +96,7 @@ impl ConfigManager {
                         config_path.display(),
                         e
                     );
-                    AppConfig::default()
+                    (AppConfig::default(), true)
                 }
             }
         } else {
@@ -97,8 +110,18 @@ impl ConfigManager {
                 "[Config] Created default config at {}",
                 config_path.display()
             );
-            cfg
+            (cfg, false)
         };
+
+        // Backfill: re-save the config so any new fields are written with defaults
+        if needs_backfill {
+            let content = serde_json::to_string_pretty(&config)?;
+            fs::write(config_path, &content)?;
+            info!(
+                "[Config] Backfilled missing fields in {}",
+                config_path.display()
+            );
+        }
 
         Ok(Arc::new(Self {
             config: RwLock::new(config),

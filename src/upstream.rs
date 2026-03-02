@@ -75,6 +75,25 @@ pub async fn connect_via_upstream(
     }
 }
 
+/// Connect to a target through an upstream proxy, using a **pre-connected**
+/// `TcpStream` to the proxy server.
+///
+/// This is used by the TUN proxy module where the TCP socket needs special
+/// options (e.g., `IP_UNICAST_IF`) to bypass TUN routing before connecting
+/// to the proxy server.
+pub async fn connect_via_upstream_with_stream(
+    proxy_url: &str,
+    target_host: &str,
+    target_port: u16,
+    stream: TcpStream,
+) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
+    let info = parse_proxy_url(proxy_url)?;
+    match info.protocol.as_str() {
+        "socks5" => socks5_handshake(stream, &info, target_host, target_port).await,
+        _ => http_connect_handshake(stream, &info, target_host, target_port).await,
+    }
+}
+
 /// Establish an HTTP CONNECT tunnel through an HTTP proxy.
 pub async fn http_proxy_connect(
     proxy_info: &ProxyInfo,
@@ -82,8 +101,17 @@ pub async fn http_proxy_connect(
     target_port: u16,
 ) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
     let addr = format!("{}:{}", proxy_info.hostname, proxy_info.port);
-    let mut stream = TcpStream::connect(&addr).await?;
+    let stream = TcpStream::connect(&addr).await?;
+    http_connect_handshake(stream, proxy_info, target_host, target_port).await
+}
 
+/// Perform the HTTP CONNECT handshake on an already-connected stream.
+async fn http_connect_handshake(
+    mut stream: TcpStream,
+    proxy_info: &ProxyInfo,
+    target_host: &str,
+    target_port: u16,
+) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
     let mut connect_req = format!(
         "CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\n",
         target_host, target_port, target_host, target_port
@@ -218,8 +246,17 @@ pub async fn socks5_connect(
     target_port: u16,
 ) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
     let addr = format!("{}:{}", proxy_info.hostname, proxy_info.port);
-    let mut stream = TcpStream::connect(&addr).await?;
+    let stream = TcpStream::connect(&addr).await?;
+    socks5_handshake(stream, proxy_info, target_host, target_port).await
+}
 
+/// Perform the SOCKS5 handshake on an already-connected stream.
+async fn socks5_handshake(
+    mut stream: TcpStream,
+    proxy_info: &ProxyInfo,
+    target_host: &str,
+    target_port: u16,
+) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
     // Step 1: Send greeting
     let has_auth = proxy_info.auth.is_some();
     if has_auth {

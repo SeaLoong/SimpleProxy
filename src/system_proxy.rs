@@ -182,7 +182,7 @@ fn notify_windows_proxy_change() {
     use std::ptr;
 
     #[link(name = "wininet")]
-    extern "system" {
+    unsafe extern "system" {
         fn InternetSetOptionW(
             hInternet: *mut std::ffi::c_void,
             dwOption: u32,

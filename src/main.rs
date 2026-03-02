@@ -6,6 +6,7 @@ mod config;
 mod proxy;
 mod rule_engine;
 mod system_proxy;
+mod tun_proxy;
 mod upstream;
 mod web;
 
@@ -97,14 +98,30 @@ async fn main() {
     // Check if CA certificate is installed in system trust store
     cert_mgr.check_ca_trusted();
 
+    // Create TUN manager for runtime start/stop
+    let tun_mgr = tun_proxy::TunManager::new();
+
+    // Auto-start TUN if enabled in config
+    if cfg.tun.enabled {
+        let tun_config = cfg.tun.clone();
+        let tun_upstream = cfg.upstream_proxy.clone();
+        let tun_mgr_start = Arc::clone(&tun_mgr);
+        tokio::spawn(async move {
+            if let Err(e) = tun_mgr_start.start(tun_config, tun_upstream).await {
+                error!("TUN proxy auto-start error: {}", e);
+            }
+        });
+    }
+
     // Start web dashboard
     let web_cfg = Arc::clone(&config_mgr);
     let web_engine = Arc::clone(&rule_engine);
     let web_certs = Arc::clone(&cert_mgr);
     let web_sys_proxy = Arc::clone(&sys_proxy_mgr);
+    let web_tun = Arc::clone(&tun_mgr);
     let web_port = cfg.web_port;
     tokio::spawn(async move {
-        if let Err(e) = web::start_web_server(web_cfg, web_engine, web_certs, web_sys_proxy, web_port).await {
+        if let Err(e) = web::start_web_server(web_cfg, web_engine, web_certs, web_sys_proxy, web_tun, web_port).await {
             error!("Web dashboard error: {}", e);
         }
     });
@@ -148,5 +165,9 @@ async fn main() {
         info!("Restoring system proxy settings before exit...");
     }
     drop(sys_proxy_mgr);
+
+    // Stop TUN proxy if running
+    tun_mgr.stop().await;
+
     info!("Goodbye!");
 }

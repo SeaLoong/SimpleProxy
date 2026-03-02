@@ -5,6 +5,7 @@ use crate::cert::CertManager;
 use crate::config::ConfigManager;
 use crate::rule_engine::{Rule, RuleEngine};
 use crate::system_proxy::SystemProxyManager;
+use crate::tun_proxy::TunManager;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -16,6 +17,7 @@ pub async fn start_web_server(
     rule_engine: Arc<RuleEngine>,
     cert_mgr: Arc<CertManager>,
     sys_proxy_mgr: Arc<SystemProxyManager>,
+    tun_mgr: Arc<TunManager>,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
@@ -27,8 +29,9 @@ pub async fn start_web_server(
         let eng = Arc::clone(&rule_engine);
         let crt = Arc::clone(&cert_mgr);
         let sp = Arc::clone(&sys_proxy_mgr);
+        let tm = Arc::clone(&tun_mgr);
         tokio::spawn(async move {
-            if let Err(e) = handle_web_request(stream, cfg, eng, crt, sp).await {
+            if let Err(e) = handle_web_request(stream, cfg, eng, crt, sp, tm).await {
                 error!("[Web] Request error: {}", e);
             }
         });
@@ -42,6 +45,7 @@ async fn handle_web_request(
     rule_engine: Arc<RuleEngine>,
     cert_mgr: Arc<CertManager>,
     sys_proxy_mgr: Arc<SystemProxyManager>,
+    tun_mgr: Arc<TunManager>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = vec![0u8; 65536];
     let n = stream.read(&mut buf).await?;
@@ -153,6 +157,101 @@ async fn handle_web_request(
                 }
                 Err(e) => {
                     send_json(&mut stream, 400, &format!(r#"{{"error":"{}"}}"#, e)).await?;
+                }
+            }
+        }
+
+        // ── TUN Proxy API ──
+        ("GET", "/api/tun/status") => {
+            let running = tun_mgr.is_running().await;
+            let cfg = config_mgr.get();
+            let tun_json = serde_json::to_string(&cfg.tun)?;
+            send_json(
+                &mut stream,
+                200,
+                &format!(r#"{{"running":{},"config":{}}}"#, running, tun_json),
+            )
+            .await?;
+        }
+        ("POST", "/api/tun/start") => {
+            let cfg = config_mgr.get();
+            let mut tun_cfg = cfg.tun.clone();
+            tun_cfg.enabled = true;
+            // Persist enabled = true to config
+            let mut new_cfg = cfg.clone();
+            new_cfg.tun.enabled = true;
+            let _ = config_mgr.update(new_cfg);
+            match tun_mgr.start(tun_cfg, cfg.upstream_proxy.clone()).await {
+                Ok(()) => {
+                    send_json(&mut stream, 200, r#"{"ok":true}"#).await?;
+                }
+                Err(e) => {
+                    send_json(
+                        &mut stream,
+                        500,
+                        &format!(r#"{{"error":"{}"}}"#, e),
+                    )
+                    .await?;
+                }
+            }
+        }
+        ("POST", "/api/tun/stop") => {
+            tun_mgr.stop().await;
+            // Persist enabled = false to config
+            let mut cfg = config_mgr.get();
+            cfg.tun.enabled = false;
+            let _ = config_mgr.update(cfg);
+            send_json(&mut stream, 200, r#"{"ok":true}"#).await?;
+        }
+        ("POST", "/api/tun/restart") => {
+            let cfg = config_mgr.get();
+            let mut tun_cfg = cfg.tun.clone();
+            tun_cfg.enabled = true;
+            match tun_mgr.restart(tun_cfg, cfg.upstream_proxy.clone()).await {
+                Ok(()) => {
+                    send_json(&mut stream, 200, r#"{"ok":true}"#).await?;
+                }
+                Err(e) => {
+                    send_json(
+                        &mut stream,
+                        500,
+                        &format!(r#"{{"error":"{}"}}"#, e),
+                    )
+                    .await?;
+                }
+            }
+        }
+        ("PUT", "/api/tun/config") => {
+            match serde_json::from_str::<crate::tun_proxy::TunConfig>(body) {
+                Ok(new_tun) => {
+                    let mut cfg = config_mgr.get();
+                    let was_enabled = cfg.tun.enabled;
+                    cfg.tun = new_tun;
+                    if let Err(e) = config_mgr.update(cfg.clone()) {
+                        send_json(
+                            &mut stream,
+                            500,
+                            &format!(r#"{{"error":"{}"}}"#, e),
+                        )
+                        .await?;
+                    } else {
+                        // If TUN was running, restart with new config
+                        if was_enabled && tun_mgr.is_running().await {
+                            let tun_cfg = cfg.tun.clone();
+                            let _ = tun_mgr
+                                .restart(tun_cfg, cfg.upstream_proxy.clone())
+                                .await;
+                        }
+                        send_json(&mut stream, 200, r#"{"ok":true}"#).await?;
+                    }
+                }
+                Err(e) => {
+                    send_json(
+                        &mut stream,
+                        400,
+                        &format!(r#"{{"error":"{}"}}"#, e),
+                    )
+                    .await?;
                 }
             }
         }
@@ -322,6 +421,28 @@ textarea{width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(-
 <div class="actions"><button class="btn btn-primary" onclick="saveConfig()" data-i18n="save_config"></button></div>
 </div>
 
+<!-- TUN Proxy Card -->
+<div class="card" id="tunCard">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+  <h2 style="margin:0">🌐 <span data-i18n="tun_title"></span></h2>
+  <div style="display:flex;align-items:center;gap:10px">
+    <span id="tunStatus" class="badge badge-off"></span>
+    <button class="btn btn-success btn-sm" id="tunStartBtn" onclick="tunStart()" data-i18n="tun_start"></button>
+    <button class="btn btn-danger btn-sm" id="tunStopBtn" onclick="tunStop()" style="display:none" data-i18n="tun_stop"></button>
+    <button class="btn btn-warn btn-sm" id="tunRestartBtn" onclick="tunRestart()" style="display:none" data-i18n="tun_restart"></button>
+  </div>
+</div>
+<div class="form-grid">
+  <div><label data-i18n="tun_address"></label><input id="tunAddress" type="text" value="10.0.0.33"></div>
+  <div><label data-i18n="tun_netmask"></label><input id="tunNetmask" type="text" value="255.255.255.0"></div>
+  <div><label data-i18n="tun_dns"></label><input id="tunDns" type="text" value="8.8.8.8"></div>
+  <div><label data-i18n="tun_mtu"></label><input id="tunMtu" type="number" value="1500"></div>
+  <div class="full-span"><label data-i18n="tun_routes"></label><textarea id="tunRoutes" rows="3" data-ph="tun_routes_ph"></textarea></div>
+  <div class="full-span"><label data-i18n="tun_excluded"></label><textarea id="tunExcluded" rows="2" data-ph="tun_excluded_ph"></textarea></div>
+</div>
+<div class="actions"><button class="btn btn-primary" onclick="saveTunConfig()" data-i18n="tun_save"></button></div>
+</div>
+
 <!-- Rules Card -->
 <div class="card">
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
@@ -406,7 +527,17 @@ en:{
   msg_match_required:'Match pattern is required',msg_json_invalid:'Headers must be valid JSON',
   lang_label:'中文',
   hint_redirect_proxy:'redirect / proxy',hint_replace:'replace',hint_replace_block:'replace / block',
-  hint_forward:'forward',hint_proxy_forward:'proxy / forward'
+  hint_forward:'forward',hint_proxy_forward:'proxy / forward',
+  tun_title:'TUN Virtual NIC',
+  tun_start:'Start',tun_stop:'Stop',tun_restart:'Restart',
+  tun_running:'Running',tun_stopped:'Stopped',tun_starting:'Starting...',tun_stopping:'Stopping...',
+  tun_address:'TUN Address',tun_netmask:'Netmask',tun_dns:'DNS Server',tun_mtu:'MTU',
+  tun_routes:'Routes (CIDR, one per line)',tun_routes_ph:'e.g. 0.0.0.0/0 for all traffic',
+  tun_excluded:'Excluded IPs (one per line)',tun_excluded_ph:'IPs that bypass TUN (auto-adds upstream proxy)',
+  tun_save:'Save TUN Config',
+  msg_tun_started:'TUN proxy started',msg_tun_stopped:'TUN proxy stopped',
+  msg_tun_restarted:'TUN proxy restarted',msg_tun_start_err:'Failed to start TUN proxy',
+  msg_tun_saved:'TUN config saved'
 },
 zh:{
   subtitle:'管理代理配置和 URL 拦截规则',
@@ -446,7 +577,17 @@ zh:{
   msg_match_required:'匹配模式不能为空',msg_json_invalid:'请求头必须是有效的 JSON',
   lang_label:'EN',
   hint_redirect_proxy:'redirect / proxy',hint_replace:'replace',hint_replace_block:'replace / block',
-  hint_forward:'forward',hint_proxy_forward:'proxy / forward'
+  hint_forward:'forward',hint_proxy_forward:'proxy / forward',
+  tun_title:'TUN 虚拟网卡',
+  tun_start:'启动',tun_stop:'停止',tun_restart:'重启',
+  tun_running:'运行中',tun_stopped:'已停止',tun_starting:'启动中...',tun_stopping:'停止中...',
+  tun_address:'TUN 地址',tun_netmask:'子网掩码',tun_dns:'DNS 服务器',tun_mtu:'MTU',
+  tun_routes:'路由 (CIDR, 每行一条)',tun_routes_ph:'例如 0.0.0.0/0 表示全部流量',
+  tun_excluded:'排除 IP (每行一个)',tun_excluded_ph:'绕过 TUN 的 IP（自动添加上游代理）',
+  tun_save:'保存 TUN 配置',
+  msg_tun_started:'TUN 代理已启动',msg_tun_stopped:'TUN 代理已停止',
+  msg_tun_restarted:'TUN 代理已重启',msg_tun_start_err:'TUN 代理启动失败',
+  msg_tun_saved:'TUN 配置已保存'
 }
 };
 
@@ -553,7 +694,8 @@ async function saveConfig(){
     webPort:parseInt(document.getElementById('cfgWebPort').value)||9000,
     upstreamProxy:document.getElementById('cfgUpstream').value||null,
     autoOpenBrowser:document.getElementById('cfgAutoOpen').checked,
-    systemProxy:document.getElementById('cfgSysProxy').checked
+    systemProxy:document.getElementById('cfgSysProxy').checked,
+    tun:getTunConfigFromForm()
   };
   try{
     const r=await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(c)});
@@ -701,7 +843,101 @@ async function toggleSysProxy(enabled){
   }finally{sysProxyBusy=false;}
 }
 
-loadConfig();loadRules();loadSysProxyStatus();applyI18n();
+/* ── TUN Proxy ── */
+function getTunConfigFromForm(){
+  const routesText=document.getElementById('tunRoutes').value.trim();
+  const routes=routesText?routesText.split('\n').map(s=>s.trim()).filter(s=>s):['0.0.0.0/0'];
+  const exclText=document.getElementById('tunExcluded').value.trim();
+  const excluded=exclText?exclText.split('\n').map(s=>s.trim()).filter(s=>s):[];
+  return{
+    enabled:tunRunning,
+    address:document.getElementById('tunAddress').value||'10.0.0.33',
+    netmask:document.getElementById('tunNetmask').value||'255.255.255.0',
+    dns:document.getElementById('tunDns').value||'8.8.8.8',
+    mtu:parseInt(document.getElementById('tunMtu').value)||1500,
+    routes:routes,
+    excluded_ips:excluded
+  };
+}
+function renderTunConfig(tc){
+  if(!tc)return;
+  document.getElementById('tunAddress').value=tc.address||'10.0.0.33';
+  document.getElementById('tunNetmask').value=tc.netmask||'255.255.255.0';
+  document.getElementById('tunDns').value=tc.dns||'8.8.8.8';
+  document.getElementById('tunMtu').value=tc.mtu||1500;
+  document.getElementById('tunRoutes').value=(tc.routes&&tc.routes.length?tc.routes:['0.0.0.0/0']).join('\n');
+  document.getElementById('tunExcluded').value=(tc.excluded_ips||[]).join('\n');
+}
+let tunRunning=false;
+let tunBusy=false;
+function updateTunUI(running){
+  tunRunning=running;
+  const badge=document.getElementById('tunStatus');
+  badge.textContent=running?T('tun_running'):T('tun_stopped');
+  badge.className='badge '+(running?'badge-on':'badge-off');
+  document.getElementById('tunStartBtn').style.display=running?'none':'';
+  document.getElementById('tunStopBtn').style.display=running?'':'none';
+  document.getElementById('tunRestartBtn').style.display=running?'':'none';
+}
+async function loadTunStatus(){
+  try{
+    const r=await fetch('/api/tun/status');
+    const s=await r.json();
+    updateTunUI(s.running);
+    if(s.config)renderTunConfig(s.config);
+  }catch(e){}
+}
+async function tunStart(){
+  if(tunBusy)return;tunBusy=true;
+  const badge=document.getElementById('tunStatus');
+  badge.textContent=T('tun_starting');badge.className='badge badge-on';
+  try{
+    /* save current form data first so the server uses latest config */
+    const tc=getTunConfigFromForm();
+    tc.enabled=true;
+    await fetch('/api/tun/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(tc)});
+    const r=await fetch('/api/tun/start',{method:'POST'});
+    if(r.ok){toast(T('msg_tun_started'),'ok');updateTunUI(true);}
+    else{const e=await r.json();toast(e.error||T('msg_tun_start_err'),'err');updateTunUI(false);}
+  }catch(e){toast(T('msg_net_err'),'err');updateTunUI(false);}
+  finally{tunBusy=false;}
+}
+async function tunStop(){
+  if(tunBusy)return;tunBusy=true;
+  const badge=document.getElementById('tunStatus');
+  badge.textContent=T('tun_stopping');badge.className='badge badge-off';
+  try{
+    const r=await fetch('/api/tun/stop',{method:'POST'});
+    if(r.ok){toast(T('msg_tun_stopped'),'ok');updateTunUI(false);}
+    else{toast(T('msg_save_failed'),'err');}
+  }catch(e){toast(T('msg_net_err'),'err');}
+  finally{tunBusy=false;}
+}
+async function tunRestart(){
+  if(tunBusy)return;tunBusy=true;
+  const badge=document.getElementById('tunStatus');
+  badge.textContent=T('tun_starting');badge.className='badge badge-on';
+  try{
+    /* save current form data first */
+    const tc=getTunConfigFromForm();
+    tc.enabled=true;
+    await fetch('/api/tun/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(tc)});
+    const r=await fetch('/api/tun/restart',{method:'POST'});
+    if(r.ok){toast(T('msg_tun_restarted'),'ok');updateTunUI(true);}
+    else{const e=await r.json();toast(e.error||T('msg_tun_start_err'),'err');loadTunStatus();}
+  }catch(e){toast(T('msg_net_err'),'err');}
+  finally{tunBusy=false;}
+}
+async function saveTunConfig(){
+  const tc=getTunConfigFromForm();
+  try{
+    const r=await fetch('/api/tun/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(tc)});
+    if(r.ok){toast(T('msg_tun_saved'),'ok');loadTunStatus();}
+    else{const e=await r.json();toast(e.error||T('msg_save_failed'),'err');}
+  }catch(e){toast(T('msg_net_err'),'err');}
+}
+
+loadConfig();loadRules();loadSysProxyStatus();loadTunStatus();applyI18n();
 </script>
 </body>
 </html>

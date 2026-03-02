@@ -6,5 +6,6 @@ pub mod config;
 pub mod proxy;
 pub mod rule_engine;
 pub mod system_proxy;
+pub mod tun_proxy;
 pub mod upstream;
 pub mod web;

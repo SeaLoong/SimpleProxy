@@ -8,6 +8,7 @@ A lightweight, configurable local HTTP/HTTPS proxy server written in Rust. Inter
 
 - **Rule-based interception** – Match URLs by exact string or regex, then redirect, replace content, block, or forward requests
 - **HTTPS MITM interception** – Transparently intercept HTTPS traffic; auto-generates CA and per-host leaf certificates
+- **Virtual NIC proxy (TUN)** – Create a virtual network adapter for transparent TCP/UDP proxying with custom routing and DNS, no system proxy required
 - **Web dashboard** – Built-in bilingual (English/Chinese) control panel at `http://127.0.0.1:9000`
 - **Hot reload** – Rules file is watched for changes and reloaded automatically
 - **Upstream proxy** – Route traffic through an HTTP or SOCKS5 upstream proxy (global or per-rule)
@@ -45,7 +46,16 @@ Settings live in **config.json** (separate from rules):
   "webPort": 9000,
   "autoOpenBrowser": true,
   "systemProxy": false,
-  "upstreamProxy": null
+  "upstreamProxy": null,
+  "tun": {
+    "enabled": false,
+    "address": "10.0.0.33",
+    "netmask": "255.255.255.0",
+    "dns": null,
+    "mtu": 1500,
+    "routes": [],
+    "excluded_ips": []
+  }
 }
 ```
 
@@ -57,6 +67,7 @@ Settings live in **config.json** (separate from rules):
 | `autoOpenBrowser` | boolean      | `true`         | Open the dashboard in the default browser on start              |
 | `systemProxy`     | boolean      | `false`        | Auto-set OS proxy on start (can be toggled live from dashboard) |
 | `upstreamProxy`   | string\|null | `null`         | Global upstream proxy URL (`http://`, `socks5://`)              |
+| `tun`             | object       | see below      | Virtual NIC (TUN) proxy configuration                           |
 
 If the config file does not exist, a default one is created automatically.
 
@@ -147,6 +158,43 @@ sudo update-ca-certificates
 
 The web dashboard shows the CA trust status and provides a download button.
 
+## Virtual NIC Proxy (TUN)
+
+SimpleProxy supports transparent network proxying via a virtual network adapter (TUN device), without manual system or browser proxy configuration.
+
+### Prerequisites
+
+- Run with **administrator privileges** (required for TUN device creation and route management)
+- **Windows**: Place `wintun.dll` in the executable directory or system PATH. Download from [wintun.net](https://www.wintun.net/)
+
+### TUN Configuration
+
+| Field          | Type         | Default           | Description                                         |
+| -------------- | ------------ | ----------------- | --------------------------------------------------- |
+| `enabled`      | boolean      | `false`           | Enable the virtual NIC proxy                        |
+| `address`      | string       | `"10.0.0.33"`     | Virtual adapter IP address                          |
+| `netmask`      | string       | `"255.255.255.0"` | Subnet mask                                         |
+| `dns`          | string\|null | `null`            | Custom DNS server (redirects DNS queries)           |
+| `mtu`          | number       | `1500`            | Maximum Transmission Unit                           |
+| `routes`       | string[]     | `[]`              | CIDR routes to capture (e.g., `"0.0.0.0/1"`)        |
+| `excluded_ips` | string[]     | `[]`              | IPs/CIDRs to exclude from TUN routing (avoid loops) |
+
+### TUN Usage Example
+
+```json
+"tun": {
+  "enabled": true,
+  "address": "10.0.0.33",
+  "netmask": "255.255.255.0",
+  "dns": "8.8.8.8",
+  "mtu": 1500,
+  "routes": ["0.0.0.0/1", "128.0.0.0/1"],
+  "excluded_ips": ["your-gateway-ip/32"]
+}
+```
+
+> **Note**: To capture all traffic, use `0.0.0.0/1` + `128.0.0.0/1` instead of `0.0.0.0/0`, and add your real gateway IP to `excluded_ips` to avoid routing loops.
+
 ## Web Dashboard
 
 The built-in dashboard provides:
@@ -182,6 +230,7 @@ src/
   cert.rs          – CA certificate management and per-host cert generation
   upstream.rs      – HTTP and SOCKS5 upstream proxy connector
   system_proxy.rs  – OS-level proxy configuration (Win/Mac/Linux)
+  tun_proxy.rs     – Virtual NIC (TUN) transparent proxy
   web.rs           – Web dashboard server and embedded bilingual UI
   lib.rs           – Library crate exports
 config.json        – Application settings

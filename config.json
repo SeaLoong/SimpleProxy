@@ -4,5 +4,14 @@
   "webPort": 9000,
   "autoOpenBrowser": true,
   "systemProxy": false,
-  "upstreamProxy": null
+  "upstreamProxy": null,
+  "tun": {
+    "enabled": false,
+    "address": "10.0.0.33",
+    "netmask": "255.255.255.0",
+    "dns": null,
+    "mtu": 1500,
+    "routes": ["0.0.0.0/0"],
+    "excluded_ips": []
+  }
 }

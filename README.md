@@ -8,6 +8,7 @@
 
 - **规则拦截** – 通过精确匹配或正则表达式匹配 URL，执行重定向、替换内容、屏蔽或转发操作
 - **HTTPS MITM 拦截** – 透明拦截 HTTPS 流量；自动生成 CA 证书和每个域名的叶子证书
+- **虚拟网卡代理（TUN）** – 创建虚拟网卡透明代理所有 TCP/UDP 流量，支持自定义路由和 DNS，无需配置系统代理
 - **Web 管理面板** – 内置中英双语控制面板 `http://127.0.0.1:9000`
 - **热重载** – 监听规则文件变更，自动重新加载
 - **上游代理** – 支持通过 HTTP 或 SOCKS5 上游代理转发流量（全局或按规则配置）
@@ -45,7 +46,16 @@ cargo build --release
   "webPort": 9000,
   "autoOpenBrowser": true,
   "systemProxy": false,
-  "upstreamProxy": null
+  "upstreamProxy": null,
+  "tun": {
+    "enabled": false,
+    "address": "10.0.0.33",
+    "netmask": "255.255.255.0",
+    "dns": null,
+    "mtu": 1500,
+    "routes": [],
+    "excluded_ips": []
+  }
 }
 ```
 
@@ -57,6 +67,7 @@ cargo build --release
 | `autoOpenBrowser` | boolean      | `true`         | 启动时自动打开浏览器                         |
 | `systemProxy`     | boolean      | `false`        | 启动时自动设置系统代理（可通过面板实时切换） |
 | `upstreamProxy`   | string\|null | `null`         | 全局上游代理 URL（`http://`、`socks5://`）   |
+| `tun`             | object       | 见下方         | 虚拟网卡（TUN）代理配置                      |
 
 如果配置文件不存在，会自动创建默认配置。
 
@@ -147,6 +158,43 @@ sudo update-ca-certificates
 
 Web 面板会显示 CA 信任状态，并提供下载和重新检查按钮。
 
+## 虚拟网卡代理（TUN）
+
+SimpleProxy 支持通过虚拟网卡（TUN 设备）透明代理网络流量，无需手动配置系统代理或浏览器代理。
+
+### 前置条件
+
+- 以**管理员权限**运行（创建虚拟网卡和管理路由需要）
+- **Windows**：将 `wintun.dll` 放在可执行文件同目录或 PATH 中。从 [wintun.net](https://www.wintun.net/) 下载
+
+### TUN 配置项
+
+| 字段           | 类型         | 默认值            | 说明                                     |
+| -------------- | ------------ | ----------------- | ---------------------------------------- |
+| `enabled`      | boolean      | `false`           | 是否启用虚拟网卡代理                     |
+| `address`      | string       | `"10.0.0.33"`     | 虚拟网卡 IP 地址                         |
+| `netmask`      | string       | `"255.255.255.0"` | 子网掩码                                 |
+| `dns`          | string\|null | `null`            | 自定义 DNS 服务器（重定向 DNS 查询）     |
+| `mtu`          | number       | `1500`            | 最大传输单元                             |
+| `routes`       | string[]     | `[]`              | 捕获的 CIDR 路由列表（如 `"0.0.0.0/1"`） |
+| `excluded_ips` | string[]     | `[]`              | 排除的 IP/CIDR 列表（避免回环）          |
+
+### TUN 使用示例
+
+```json
+"tun": {
+  "enabled": true,
+  "address": "10.0.0.33",
+  "netmask": "255.255.255.0",
+  "dns": "8.8.8.8",
+  "mtu": 1500,
+  "routes": ["0.0.0.0/1", "128.0.0.0/1"],
+  "excluded_ips": ["你的网关IP/32"]
+}
+```
+
+> **注意**：捕获全部流量时，使用 `0.0.0.0/1` + `128.0.0.0/1` 代替 `0.0.0.0/0`，并将真实网关 IP 加入 `excluded_ips` 以避免回环。
+
 ## Web 管理面板
 
 内置面板提供以下功能：
@@ -182,6 +230,7 @@ src/
   cert.rs          – CA 证书管理及按域名生成证书
   upstream.rs      – HTTP 和 SOCKS5 上游代理连接器
   system_proxy.rs  – 系统级代理配置（Win/Mac/Linux）
+  tun_proxy.rs     – 虚拟网卡（TUN）透明代理
   web.rs           – Web 面板服务器及嵌入式双语 UI
   lib.rs           – 库导出
 config.json        – 应用配置
