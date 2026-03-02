@@ -18,6 +18,11 @@ percent-encoding = "2.3"
 url = "2.5"
 base64 = "0.22"
 open = "5"
+rcgen = { version = "0.13", features = ["pem"] }
+rustls = "0.23"
+tokio-rustls = "0.26"
+rustls-pemfile = "2"
+webpki-roots = "0.26"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

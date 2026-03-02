@@ -216,6 +216,23 @@ impl RuleEngine {
         self.load()
     }
 
+    /// Check whether any enabled rule could potentially match a URL on the given hostname.
+    /// Used to decide whether to MITM a CONNECT tunnel.
+    pub fn has_potential_match_for_host(&self, hostname: &str) -> bool {
+        let inner = self.inner.read().unwrap();
+        for compiled in &inner.rules {
+            let pattern = &compiled.rule.r#match;
+            // For regex rules, check if the pattern string contains the hostname
+            // (stripping regex escapes like `\.` → `.` for comparison).
+            // For plain-string rules, just check substring containment.
+            let normalised = pattern.replace("\\.", ".");
+            if normalised.contains(hostname) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Read a local file referenced by a rule's `file` field.
     pub fn read_local_file(&self, rule: &Rule) -> Result<Vec<u8>, std::io::Error> {
         let file_path_str = rule.file.as_deref().unwrap_or("");

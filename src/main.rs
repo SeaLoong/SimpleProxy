@@ -1,6 +1,7 @@
 //! SimpleProxy - A local proxy tool that intercepts specific URLs
 //! and replaces content or redirects based on configurable rules.
 
+mod cert;
 mod config;
 mod proxy;
 mod rule_engine;
@@ -101,6 +102,22 @@ async fn main() {
         }
     });
 
+    // Initialize certificate manager for HTTPS MITM
+    let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
+    let cert_mgr = match cert::CertManager::new(config_dir) {
+        Ok(mgr) => Arc::new(mgr),
+        Err(e) => {
+            error!("Failed to initialize certificate manager: {}", e);
+            error!("HTTPS interception will not be available.");
+            // We can't continue without cert manager, but let's create a fallback
+            // For now, panic — the CA generation should rarely fail
+            panic!("Certificate manager initialization failed: {}", e);
+        }
+    };
+
+    // Check if CA certificate is installed in system trust store
+    cert_mgr.check_ca_trusted();
+
     // Auto-open browser
     if cfg.auto_open_browser {
         let url = format!("http://127.0.0.1:{}", cfg.web_port);
@@ -111,8 +128,12 @@ async fn main() {
     }
 
     // Start proxy server
-    let server =
-        proxy::ProxyServer::new(Arc::clone(&rule_engine), Arc::clone(&config_mgr), cfg.port);
+    let server = proxy::ProxyServer::new(
+        Arc::clone(&rule_engine),
+        Arc::clone(&config_mgr),
+        Arc::clone(&cert_mgr),
+        cfg.port,
+    );
 
     // Handle shutdown signals
     let shutdown = async {
