@@ -92,16 +92,6 @@ async fn main() {
         None
     };
 
-    // Start web dashboard
-    let web_cfg = Arc::clone(&config_mgr);
-    let web_engine = Arc::clone(&rule_engine);
-    let web_port = cfg.web_port;
-    tokio::spawn(async move {
-        if let Err(e) = web::start_web_server(web_cfg, web_engine, web_port).await {
-            error!("Web dashboard error: {}", e);
-        }
-    });
-
     // Initialize certificate manager for HTTPS MITM
     let config_dir = config_path.parent().unwrap_or(std::path::Path::new("."));
     let cert_mgr = match cert::CertManager::new(config_dir) {
@@ -109,14 +99,23 @@ async fn main() {
         Err(e) => {
             error!("Failed to initialize certificate manager: {}", e);
             error!("HTTPS interception will not be available.");
-            // We can't continue without cert manager, but let's create a fallback
-            // For now, panic — the CA generation should rarely fail
             panic!("Certificate manager initialization failed: {}", e);
         }
     };
 
     // Check if CA certificate is installed in system trust store
     cert_mgr.check_ca_trusted();
+
+    // Start web dashboard
+    let web_cfg = Arc::clone(&config_mgr);
+    let web_engine = Arc::clone(&rule_engine);
+    let web_certs = Arc::clone(&cert_mgr);
+    let web_port = cfg.web_port;
+    tokio::spawn(async move {
+        if let Err(e) = web::start_web_server(web_cfg, web_engine, web_certs, web_port).await {
+            error!("Web dashboard error: {}", e);
+        }
+    });
 
     // Auto-open browser
     if cfg.auto_open_browser {

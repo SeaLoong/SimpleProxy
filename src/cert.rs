@@ -4,7 +4,7 @@
 //! For each intercepted host, generates a leaf certificate signed by the CA.
 
 use rcgen::{
-    BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
+    BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
     KeyUsagePurpose, SanType,
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -91,6 +91,35 @@ impl CertManager {
         self.ca_dir.join("ca.crt")
     }
 
+    /// Get the CA certificate in PEM format (for download).
+    pub fn ca_cert_pem(&self) -> String {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&self.ca_cert_der);
+        let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
+        for (i, c) in b64.chars().enumerate() {
+            pem.push(c);
+            if (i + 1) % 64 == 0 {
+                pem.push('\n');
+            }
+        }
+        if !pem.ends_with('\n') {
+            pem.push('\n');
+        }
+        pem.push_str("-----END CERTIFICATE-----\n");
+        pem
+    }
+
+    /// Get certificate status info as a JSON string for the web API.
+    pub fn cert_status_json(&self) -> String {
+        let trusted = is_ca_trusted(&self.ca_cert_der).unwrap_or_default();
+        let path = self.ca_cert_path();
+        format!(
+            r#"{{"trusted":{},"certPath":"{}"}}"#,
+            trusted,
+            path.display().to_string().replace('\\', "\\\\")
+        )
+    }
+
     /// Get a `rustls::ServerConfig` for the given hostname.
     /// Caches the result so repeated requests reuse the same config.
     pub fn server_config_for_host(
@@ -152,9 +181,10 @@ impl CertManager {
         // Generate a new key pair for the leaf certificate
         let leaf_key_pair = KeyPair::generate()?;
 
-        // Recreate the CA Certificate object for signing (same key → same identity)
-        let ca_cert = create_ca_params().self_signed(&self.ca_key_pair)?;
-        let leaf_cert = params.signed_by(&leaf_key_pair, &ca_cert, &self.ca_key_pair)?;
+        // Create an Issuer from the CA params and key pair for signing
+        let ca_params = create_ca_params();
+        let issuer = Issuer::from_params(&ca_params, &self.ca_key_pair);
+        let leaf_cert = params.signed_by(&leaf_key_pair, &issuer)?;
 
         // Build the rustls ServerConfig
         // Use the leaf cert + the **original** CA cert from disk (the one users trust)
@@ -307,35 +337,25 @@ fn is_ca_trusted(ca_der: &[u8]) -> Result<bool, Box<dyn std::error::Error + Send
 
 #[cfg(target_os = "windows")]
 fn is_ca_trusted_windows(ca_der: &[u8]) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    use std::process::Command;
-
-    // Compute SHA-1 thumbprint of the CA cert (same as Windows uses)
-    let thumbprint = sha1_thumbprint(ca_der);
-
-    // Use certutil to check if a cert with this thumbprint exists in Root store
-    let output = Command::new("certutil")
-        .args(["-verifystore", "Root", &thumbprint])
-        .output()?;
-
-    // certutil returns exit code 0 if the cert is found and valid
-    Ok(output.status.success())
-}
-
-/// Compute SHA-1 thumbprint of a DER-encoded certificate (hex, uppercase).
-#[cfg(target_os = "windows")]
-fn sha1_thumbprint(der: &[u8]) -> String {
-    // Minimal SHA-1 implementation to avoid extra dependencies.
-    // We shell out to certutil for the actual verification anyway,
-    // so let's just use PowerShell to compute the hash.
     use std::process::{Command, Stdio};
 
-    // Write DER to a temp file, compute hash with certutil
+    // Write DER to a temp file for PowerShell to load
     let temp_dir = std::env::temp_dir();
     let temp_cert = temp_dir.join("simpleproxy_ca_check.cer");
-    let _ = fs::write(&temp_cert, der);
+    fs::write(&temp_cert, ca_der)?;
 
-    let output = Command::new("certutil")
-        .args(["-hashfile", &temp_cert.to_string_lossy(), "SHA1"])
+    // Use PowerShell to compute the thumbprint and search all trust-relevant stores:
+    //   - Root     (Trusted Root Certification Authorities)
+    //   - AuthRoot (Third-Party Root Certification Authorities)
+    //   - CA       (Intermediate Certification Authorities)
+    //   × Both LocalMachine and CurrentUser contexts → 6 locations total
+    let ps_script = format!(
+        r#"$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2("{path}"); $t = $cert.Thumbprint; $stores = @("Root","AuthRoot","CA"); $found = $false; foreach ($s in $stores) {{ foreach ($loc in @("CurrentUser","LocalMachine")) {{ $c = Get-ChildItem "Cert:\$loc\$s" -ErrorAction SilentlyContinue | Where-Object {{ $_.Thumbprint -eq $t }}; if ($c) {{ $found = $true }} }} }}; if ($found) {{ Write-Output "TRUSTED" }} else {{ Write-Output "NOT_TRUSTED" }}"#,
+        path = temp_cert.to_string_lossy().replace('\\', "\\\\")
+    );
+
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output();
@@ -345,16 +365,9 @@ fn sha1_thumbprint(der: &[u8]) -> String {
     match output {
         Ok(out) => {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            // certutil -hashfile output: line 0 = "SHA1 hash of ...", line 1 = hash, line 2 = "CertUtil: ..."
-            stdout
-                .lines()
-                .nth(1)
-                .unwrap_or("")
-                .replace(' ', "")
-                .trim()
-                .to_uppercase()
+            Ok(stdout.trim() == "TRUSTED")
         }
-        Err(_) => String::new(),
+        Err(e) => Err(format!("Failed to run PowerShell: {}", e).into()),
     }
 }
 

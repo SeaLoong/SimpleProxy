@@ -1,6 +1,7 @@
 //! Web control panel – serves a dashboard UI and JSON API for managing
 //! proxy configuration and rules at runtime.
 
+use crate::cert::CertManager;
 use crate::config::ConfigManager;
 use crate::rule_engine::{Rule, RuleEngine};
 use std::sync::Arc;
@@ -12,6 +13,7 @@ use tracing::{error, info};
 pub async fn start_web_server(
     config_mgr: Arc<ConfigManager>,
     rule_engine: Arc<RuleEngine>,
+    cert_mgr: Arc<CertManager>,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
@@ -21,8 +23,9 @@ pub async fn start_web_server(
         let (stream, _) = listener.accept().await?;
         let cfg = Arc::clone(&config_mgr);
         let eng = Arc::clone(&rule_engine);
+        let crt = Arc::clone(&cert_mgr);
         tokio::spawn(async move {
-            if let Err(e) = handle_web_request(stream, cfg, eng).await {
+            if let Err(e) = handle_web_request(stream, cfg, eng, crt).await {
                 error!("[Web] Request error: {}", e);
             }
         });
@@ -34,6 +37,7 @@ async fn handle_web_request(
     mut stream: tokio::net::TcpStream,
     config_mgr: Arc<ConfigManager>,
     rule_engine: Arc<RuleEngine>,
+    cert_mgr: Arc<CertManager>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = vec![0u8; 65536];
     let n = stream.read(&mut buf).await?;
@@ -105,6 +109,21 @@ async fn handle_web_request(
             }
         }
 
+        // ── Certificate API ──
+        ("GET", "/api/cert/status") => {
+            let json = cert_mgr.cert_status_json();
+            send_json(&mut stream, 200, &json).await?;
+        }
+        ("GET", "/api/cert/download") => {
+            let pem = cert_mgr.ca_cert_pem();
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/x-pem-file\r\nContent-Disposition: attachment; filename=\"SimpleProxy-CA.crt\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                pem.len(),
+                pem
+            );
+            stream.write_all(resp.as_bytes()).await?;
+        }
+
         // ── 404 ──
         _ => {
             send_json(&mut stream, 404, r#"{"error":"not found"}"#).await?;
@@ -156,7 +175,7 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SimpleProxy Dashboard</title>
 <style>
-:root{--bg:#0f172a;--card:#1e293b;--border:#334155;--text:#e2e8f0;--muted:#94a3b8;--accent:#38bdf8;--accent2:#818cf8;--danger:#f87171;--success:#4ade80;--warn:#fbbf24}
+:root{--bg:#0f172a;--card:#1e293b;--border:#334155;--text:#e2e8f0;--muted:#94a3b8;--accent:#38bdf8;--accent2:#818cf8;--danger:#f87171;--success:#4ade80;--warn:#fbbf24;--info:#60a5fa}
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.6}
 .container{max-width:960px;margin:0 auto;padding:24px}
@@ -179,6 +198,8 @@ input:focus{outline:none;border-color:var(--accent)}
 .btn-danger:hover{opacity:.85}
 .btn-success{background:var(--success);color:#0f172a}
 .btn-success:hover{opacity:.85}
+.btn-warn{background:var(--warn);color:#0f172a}
+.btn-warn:hover{opacity:.85}
 .btn-sm{padding:5px 12px;font-size:.82rem}
 .actions{display:flex;gap:8px;margin-top:14px}
 .toast{position:fixed;top:20px;right:20px;padding:12px 20px;border-radius:8px;font-size:.9rem;color:#0f172a;font-weight:500;opacity:0;transition:opacity .3s;z-index:999;pointer-events:none}
@@ -200,7 +221,6 @@ tr:hover td{background:rgba(56,189,248,.04)}
 .dot-off{background:var(--danger)}
 .match-text{max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'Cascadia Code',Consolas,monospace;font-size:.82rem}
 .no-rules{text-align:center;color:var(--muted);padding:30px}
-/* rule edit modal */
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;justify-content:center;align-items:center}
 .modal-overlay.open{display:flex}
 .modal{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:24px;width:520px;max-height:85vh;overflow-y:auto}
@@ -210,12 +230,33 @@ tr:hover td{background:rgba(56,189,248,.04)}
 select{width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:.9rem}
 textarea{width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:.9rem;resize:vertical;min-height:60px;font-family:inherit}
 .full-span{grid-column:1/-1}
+/* cert status banner */
+.cert-banner{display:flex;align-items:center;gap:14px;padding:14px 18px;border-radius:10px;margin-bottom:20px;font-size:.9rem}
+.cert-ok{background:rgba(74,222,128,.08);border:1px solid rgba(74,222,128,.25)}
+.cert-warn{background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.25)}
+.cert-icon{font-size:1.4rem;flex-shrink:0}
+.cert-info{flex:1}
+.cert-info strong{display:block;margin-bottom:2px}
+.cert-info small{color:var(--muted);font-size:.82rem}
+.cert-actions{display:flex;gap:8px;flex-shrink:0}
+.field-row{transition:all .2s}
+.field-hidden{display:none !important}
 </style>
 </head>
 <body>
 <div class="container">
 <h1>⚡ <span>SimpleProxy</span> Dashboard</h1>
 <p class="subtitle">Manage proxy configuration and URL interception rules</p>
+
+<!-- Certificate Status Banner -->
+<div class="cert-banner cert-warn" id="certBanner" style="display:none">
+  <div class="cert-icon" id="certIcon">⚠️</div>
+  <div class="cert-info">
+    <strong id="certTitle">Checking certificate status...</strong>
+    <small id="certDetail"></small>
+  </div>
+  <div class="cert-actions" id="certActions"></div>
+</div>
 
 <!-- Config Card -->
 <div class="card" id="configCard">
@@ -250,18 +291,19 @@ textarea{width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(-
 <div class="modal">
 <h3 id="modalTitle">Add Rule</h3>
 <div class="form-grid">
+  <div class="full-span"><label>Comment</label><input id="ruleComment" type="text" placeholder="Description of this rule"></div>
   <div class="full-span"><label>Match Pattern</label><input id="ruleMatch" type="text" placeholder="URL or regex pattern"></div>
   <div><label>Type</label>
-    <select id="ruleType"><option value="redirect">redirect</option><option value="replace">replace</option><option value="block">block</option><option value="proxy">proxy</option><option value="forward">forward</option></select>
+    <select id="ruleType" onchange="onTypeChange()"><option value="redirect">redirect</option><option value="replace">replace</option><option value="block">block</option><option value="proxy">proxy</option><option value="forward">forward</option></select>
   </div>
   <div class="checkbox-row"><input id="ruleIsRegex" type="checkbox"><label for="ruleIsRegex">Is Regex</label></div>
-  <div class="full-span"><label>Target URL</label><input id="ruleTarget" type="text" placeholder="(for redirect / proxy)"></div>
-  <div><label>Status Code</label><input id="ruleStatus" type="number" placeholder="e.g. 302"></div>
-  <div><label>Content-Type</label><input id="ruleContentType" type="text" placeholder="(for replace)"></div>
-  <div class="full-span"><label>Body</label><textarea id="ruleBody" placeholder="Response body (for replace / block)"></textarea></div>
-  <div class="full-span"><label>File</label><input id="ruleFile" type="text" placeholder="Local file path (for replace)"></div>
-  <div class="full-span"><label>Upstream Proxy</label><input id="ruleUpstream" type="text" placeholder="(for forward type)"></div>
-  <div class="full-span"><label>Comment</label><input id="ruleComment" type="text"></div>
+  <div class="full-span field-row" id="rowTarget"><label>Target URL <small style="color:var(--muted)">(redirect / proxy)</small></label><input id="ruleTarget" type="text" placeholder="https://example.com/new-path"></div>
+  <div class="field-row" id="rowStatus"><label>Status Code</label><input id="ruleStatus" type="number" placeholder="e.g. 302"></div>
+  <div class="field-row" id="rowContentType"><label>Content-Type <small style="color:var(--muted)">(replace)</small></label><input id="ruleContentType" type="text" placeholder="application/json"></div>
+  <div class="full-span field-row" id="rowBody"><label>Body <small style="color:var(--muted)">(replace / block)</small></label><textarea id="ruleBody" placeholder="Response body content"></textarea></div>
+  <div class="full-span field-row" id="rowFile"><label>File <small style="color:var(--muted)">(replace)</small></label><input id="ruleFile" type="text" placeholder="./path/to/local/file"></div>
+  <div class="full-span field-row" id="rowUpstream"><label>Upstream Proxy <small style="color:var(--muted)">(forward)</small></label><input id="ruleUpstream" type="text" placeholder="http://proxy:port or socks5://proxy:port"></div>
+  <div class="full-span field-row" id="rowHeaders"><label>Custom Headers <small style="color:var(--muted)">(proxy / forward, JSON)</small></label><textarea id="ruleHeaders" placeholder='{"X-Custom":"value"}' style="min-height:40px"></textarea></div>
   <div class="checkbox-row"><input id="ruleEnabled" type="checkbox" checked><label for="ruleEnabled">Enabled</label></div>
 </div>
 <div class="actions">
@@ -276,8 +318,59 @@ textarea{width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(-
 <script>
 let config={};
 let rules=[];
-let editIndex=-1; // -1 = add, >=0 = edit
+let editIndex=-1;
 
+/* ── Field visibility per rule type ── */
+const typeFields={
+  redirect: ['rowTarget','rowStatus'],
+  replace:  ['rowStatus','rowContentType','rowBody','rowFile'],
+  block:    ['rowStatus','rowBody'],
+  proxy:    ['rowTarget','rowHeaders'],
+  forward:  ['rowUpstream','rowHeaders']
+};
+const allFieldRows=['rowTarget','rowStatus','rowContentType','rowBody','rowFile','rowUpstream','rowHeaders'];
+
+function onTypeChange(){
+  const t=document.getElementById('ruleType').value;
+  const visible=typeFields[t]||[];
+  allFieldRows.forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.classList.toggle('field-hidden',!visible.includes(id));
+  });
+}
+
+/* ── Certificate status ── */
+async function loadCertStatus(){
+  try{
+    const r=await fetch('/api/cert/status');
+    const s=await r.json();
+    const banner=document.getElementById('certBanner');
+    const icon=document.getElementById('certIcon');
+    const title=document.getElementById('certTitle');
+    const detail=document.getElementById('certDetail');
+    const actions=document.getElementById('certActions');
+    banner.style.display='flex';
+    if(s.trusted){
+      banner.className='cert-banner cert-ok';
+      icon.textContent='✅';
+      title.textContent='CA Certificate is trusted';
+      detail.textContent='HTTPS interception is fully functional. The SimpleProxy CA is installed in the system trust store.';
+      actions.innerHTML='<button class="btn btn-sm btn-primary" onclick="downloadCert()">Download CA</button>';
+    }else{
+      banner.className='cert-banner cert-warn';
+      icon.textContent='⚠️';
+      title.textContent='CA Certificate is NOT trusted';
+      detail.textContent='HTTPS interception rules will cause browser security warnings. Install the CA certificate to enable seamless interception.';
+      actions.innerHTML='<button class="btn btn-sm btn-warn" onclick="downloadCert()">Download CA</button> <button class="btn btn-sm btn-primary" onclick="refreshCert()">Re-check</button>';
+    }
+  }catch(e){
+    document.getElementById('certBanner').style.display='none';
+  }
+}
+function downloadCert(){window.location.href='/api/cert/download';}
+function refreshCert(){loadCertStatus();}
+
+/* ── Config ── */
 async function loadConfig(){
   try{const r=await fetch('/api/config');config=await r.json();renderConfig();}catch(e){toast('Failed to load config','err');}
 }
@@ -309,6 +402,7 @@ async function saveConfig(){
   }catch(e){toast('Network error','err');}
 }
 
+/* ── Rules ── */
 function badgeClass(t){return 'badge badge-'+(t||'proxy');}
 
 function renderRules(){
@@ -330,7 +424,15 @@ function renderRules(){
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
-function openAddRule(){editIndex=-1;document.getElementById('modalTitle').textContent='Add Rule';clearModal();document.getElementById('ruleEnabled').checked=true;document.getElementById('ruleModal').classList.add('open');}
+function openAddRule(){
+  editIndex=-1;
+  document.getElementById('modalTitle').textContent='Add Rule';
+  clearModal();
+  document.getElementById('ruleEnabled').checked=true;
+  document.getElementById('ruleType').value='redirect';
+  onTypeChange();
+  document.getElementById('ruleModal').classList.add('open');
+}
 
 function openEditRule(i){
   editIndex=i;const r=rules[i];
@@ -344,13 +446,15 @@ function openEditRule(i){
   document.getElementById('ruleBody').value=r.body||'';
   document.getElementById('ruleFile').value=r.file||'';
   document.getElementById('ruleUpstream').value=r.upstreamProxy||'';
+  document.getElementById('ruleHeaders').value=r.headers?JSON.stringify(r.headers):'';
   document.getElementById('ruleComment').value=r.comment||'';
   document.getElementById('ruleEnabled').checked=r.enabled!==false;
+  onTypeChange();
   document.getElementById('ruleModal').classList.add('open');
 }
 
 function clearModal(){
-  ['ruleMatch','ruleTarget','ruleStatus','ruleContentType','ruleBody','ruleFile','ruleUpstream','ruleComment'].forEach(id=>document.getElementById(id).value='');
+  ['ruleMatch','ruleTarget','ruleStatus','ruleContentType','ruleBody','ruleFile','ruleUpstream','ruleComment','ruleHeaders'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('ruleIsRegex').checked=false;
   document.getElementById('ruleType').value='redirect';
 }
@@ -360,12 +464,18 @@ function closeModal(){document.getElementById('ruleModal').classList.remove('ope
 async function saveRule(){
   const r={match:document.getElementById('ruleMatch').value,type:document.getElementById('ruleType').value,enabled:document.getElementById('ruleEnabled').checked};
   if(document.getElementById('ruleIsRegex').checked)r.isRegex=true;
-  const target=document.getElementById('ruleTarget').value;if(target)r.target=target;
-  const sc=parseInt(document.getElementById('ruleStatus').value);if(sc)r.statusCode=sc;
-  const ct=document.getElementById('ruleContentType').value;if(ct)r.contentType=ct;
-  const body=document.getElementById('ruleBody').value;if(body)r.body=body;
-  const file=document.getElementById('ruleFile').value;if(file)r.file=file;
-  const up=document.getElementById('ruleUpstream').value;if(up)r.upstreamProxy=up;
+  const t=r.type;
+  const visible=typeFields[t]||[];
+  if(visible.includes('rowTarget')){const v=document.getElementById('ruleTarget').value;if(v)r.target=v;}
+  if(visible.includes('rowStatus')){const v=parseInt(document.getElementById('ruleStatus').value);if(v)r.statusCode=v;}
+  if(visible.includes('rowContentType')){const v=document.getElementById('ruleContentType').value;if(v)r.contentType=v;}
+  if(visible.includes('rowBody')){const v=document.getElementById('ruleBody').value;if(v)r.body=v;}
+  if(visible.includes('rowFile')){const v=document.getElementById('ruleFile').value;if(v)r.file=v;}
+  if(visible.includes('rowUpstream')){const v=document.getElementById('ruleUpstream').value;if(v)r.upstreamProxy=v;}
+  if(visible.includes('rowHeaders')){
+    const v=document.getElementById('ruleHeaders').value.trim();
+    if(v){try{r.headers=JSON.parse(v);}catch(e){toast('Headers must be valid JSON','err');return;}}
+  }
   const comment=document.getElementById('ruleComment').value;if(comment)r.comment=comment;
 
   if(!r.match){toast('Match pattern is required','err');return;}
@@ -392,7 +502,7 @@ function toast(msg,type){
   setTimeout(()=>el.classList.remove('show'),2500);
 }
 
-loadConfig();loadRules();
+loadConfig();loadRules();loadCertStatus();
 </script>
 </body>
 </html>

@@ -3,13 +3,13 @@ name = "simple-proxy"
 version = "1.1.0"
 edition = "2021"
 description = "A local proxy tool that intercepts specific URLs and replaces content, redirects, or blocks requests based on configurable rules. Includes a web dashboard for visual management."
-license = "ISC"
+license = "MIT"
 
 [dependencies]
-tokio = { version = "1.44", features = ["rt-multi-thread", "net", "io-util", "signal", "macros"] }
+tokio = { version = "1.49", features = ["rt-multi-thread", "net", "io-util", "signal", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-regex = "1.11"
+regex = "1.12"
 notify = "8.2.0"
 clap = { version = "4.5", features = ["derive", "env"] }
 tracing = "0.1"
@@ -18,11 +18,11 @@ percent-encoding = "2.3"
 url = "2.5"
 base64 = "0.22"
 open = "5"
-rcgen = { version = "0.13", features = ["pem"] }
+rcgen = { version = "0.14", features = ["pem"] }
 rustls = "0.23"
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
-webpki-roots = "0.26"
+webpki-roots = "1.0"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
