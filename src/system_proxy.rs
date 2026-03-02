@@ -79,11 +79,18 @@ impl SystemProxyManager {
         Ok(())
     }
 
-    /// Disable the system proxy (restores original settings). No-op if already disabled.
+    /// Disable the system proxy (explicitly clears proxy settings). No-op if already disabled.
     pub fn disable(&self) {
         let mut guard = self.guard.lock().unwrap();
-        if let Some(g) = guard.take() {
-            drop(g); // triggers the restore function
+        if let Some(mut g) = guard.take() {
+            // Suppress the restore function — we want to explicitly clear,
+            // not restore to a potentially stale previous state.
+            g.restore_fn = None;
+            drop(g);
+            // Explicitly clear the system proxy
+            if let Err(e) = clear_system_proxy_platform() {
+                error!("Failed to clear system proxy: {}", e);
+            }
             info!("System proxy disabled");
         }
     }
@@ -198,6 +205,22 @@ fn notify_windows_proxy_change() {
     }
 }
 
+/// Explicitly disable the system proxy on Windows.
+#[cfg(target_os = "windows")]
+fn clear_system_proxy_platform() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use winreg::enums::*;
+    use winreg::RegKey;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) =
+        hkcu.create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")?;
+
+    key.set_value("ProxyEnable", &0u32)?;
+    notify_windows_proxy_change();
+    debug!("Windows system proxy explicitly disabled (ProxyEnable=0)");
+    Ok(())
+}
+
 // ─── macOS implementation ────────────────────────────
 
 #[cfg(target_os = "macos")]
@@ -260,6 +283,31 @@ fn set_system_proxy_platform(
             debug!("macOS proxy settings restored for {}", service_clone);
         })),
     })
+}
+
+/// Explicitly disable the system proxy on macOS.
+#[cfg(target_os = "macos")]
+fn clear_system_proxy_platform() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use std::process::Command;
+
+    let output = Command::new("networksetup")
+        .args(["-listallnetworkservices"])
+        .output()?;
+    let services = String::from_utf8_lossy(&output.stdout);
+    let service = services
+        .lines()
+        .skip(1)
+        .find(|line| !line.starts_with('*'))
+        .unwrap_or("Wi-Fi");
+
+    let _ = Command::new("networksetup")
+        .args(["-setwebproxystate", service, "off"])
+        .output();
+    let _ = Command::new("networksetup")
+        .args(["-setsecurewebproxystate", service, "off"])
+        .output();
+    debug!("macOS system proxy explicitly disabled for {}", service);
+    Ok(())
 }
 
 // ─── Linux implementation ────────────────────────────
@@ -335,4 +383,24 @@ fn set_system_proxy_platform(
             })),
         })
     }
+}
+
+/// Explicitly disable the system proxy on Linux.
+#[cfg(target_os = "linux")]
+fn clear_system_proxy_platform() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use std::process::Command;
+
+    let gsettings_available = Command::new("which")
+        .arg("gsettings")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if gsettings_available {
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy", "mode", "'none'"])
+            .output();
+        debug!("Linux system proxy explicitly disabled (mode=none)");
+    }
+    Ok(())
 }

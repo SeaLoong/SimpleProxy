@@ -1,6 +1,6 @@
 [package]
 name = "simple-proxy"
-version = "1.3.0"
+version = "1.3.1"
 edition = "2021"
 description = "A local proxy tool that intercepts specific URLs and replaces content, redirects, or blocks requests based on configurable rules. Includes a web dashboard for visual management."
 license = "MIT"
